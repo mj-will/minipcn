@@ -1,5 +1,5 @@
 from minicrank import Sampler
-from minicrank.step import TCPNStep
+from minicrank.step import TPCNStep
 
 
 def test_sampling_with_tcpn(rng, log_target_fn):
@@ -9,7 +9,7 @@ def test_sampling_with_tcpn(rng, log_target_fn):
     sampler = Sampler(
         log_prob_fn=log_target_fn,
         dims=dims,
-        step_fn=TCPNStep(dims=dims, rng=rng, rho=0.5),
+        step_fn=TPCNStep(dims=dims, rng=rng, rho=0.5),
         rng=rng,
         target_acceptance_rate=0.234,
     )

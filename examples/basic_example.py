@@ -3,7 +3,7 @@ import numpy as np
 from scipy import stats
 
 from minicrank import Sampler
-from minicrank.step import TCPNStep
+from minicrank.step import TPCNStep
 
 rng = np.random.default_rng(seed=42)
 
@@ -22,7 +22,7 @@ x_init = rng.normal(size=(1000, dims))  # Initial samples
 sampler = Sampler(
     log_prob_fn=log_target_fn,
     dims=dims,
-    step_fn=TCPNStep(dims=dims, rng=rng, rho=0.5),
+    step_fn=TPCNStep(dims=dims, rng=rng, rho=0.5),
     rng=rng,
     target_acceptance_rate=0.234,
 )

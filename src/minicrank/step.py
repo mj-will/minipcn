@@ -25,7 +25,7 @@ class Step:
         return self.step(*args, **kwargs)
 
 
-class TCPNStep(Step):
+class TPCNStep(Step):
     def __init__(self, dims, rng, rho: float = 0.5):
         super().__init__(dims, rng)
 
