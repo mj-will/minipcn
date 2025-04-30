@@ -1,6 +1,6 @@
 # Minicrank
 
-A minimal implementation of preconditioned Crank-Nicholson MCMC sampling.
+A minimal implementation of preconditioned Crank-Nicolson MCMC sampling.
 
 ## Installation
 
