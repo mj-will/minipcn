@@ -35,7 +35,7 @@ fig.savefig("acceptance_rate.png")
 fig = history.plot_extra_stat("rho")
 fig.savefig("rho.png")
 
-target_samples = dist.rvs(size=len(len(x_init)))
+target_samples = dist.rvs(size=len(x_init))
 
 fig = corner.corner(target_samples, color="k")
 fig = corner.corner(chain[-1], color="red", fig=fig)
