@@ -42,7 +42,10 @@ class Sampler:
         self.target_acceptance_rate = target_acceptance_rate
 
     def sample(
-        self, x_init: np.ndarray, n_steps: int
+        self,
+        x_init: np.ndarray,
+        n_steps: int,
+        verbose: bool = True,
     ) -> tuple[np.ndarray, ChainStateHistory]:
         """Run the MiniCrank sampler.
 
@@ -53,6 +56,9 @@ class Sampler:
             of samples and D is the number of dimensions.
         n_steps : int
             Number of steps to run the sampler.
+        verbose : bool, optional
+            If True, display a progress bar. Default is True.
+            If False, no progress bar is displayed.
 
         Returns
         -------
@@ -67,7 +73,7 @@ class Sampler:
         chain = np.empty((n_steps + 1, x.shape[0], x.shape[1]), dtype=x.dtype)
         chain[0] = x
         states = []
-        with trange(n_steps, desc="Sampling", unit="step") as pbar:
+        with trange(n_steps, desc="Sampling", unit="step", disable=not verbose) as pbar:
             for i in pbar:
                 x_new, log_jac = self.step_fn(x)
                 log_prob_x_new = self.log_prob_fn(x_new)
