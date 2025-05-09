@@ -73,7 +73,9 @@ class Sampler:
         chain = np.empty((n_steps + 1, x.shape[0], x.shape[1]), dtype=x.dtype)
         chain[0] = x
         states = []
-        with trange(n_steps, desc="Sampling", unit="step", disable=not verbose) as pbar:
+        with trange(
+            n_steps, desc="Sampling", unit="step", disable=not verbose
+        ) as pbar:
             for i in pbar:
                 x_new, log_alpha_step = self.step_fn(x)
                 log_prob_x_new = self.log_prob_fn(x_new)
@@ -96,9 +98,7 @@ class Sampler:
                 pbar_dict = {
                     "acceptance_rate": state.acceptance_rate,
                 }
-                pbar_dict.update(
-                    state.extra_stats
-                )
+                pbar_dict.update(state.extra_stats)
                 pbar.set_postfix(pbar_dict)
 
         state_history = ChainStateHistory.from_chain_states(states)
