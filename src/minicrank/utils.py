@@ -29,7 +29,7 @@ class ChainStateHistory:
     ) -> "ChainStateHistory":
         extra_stats = {}
         for key in states[0].extra_stats.keys():
-            extra_stats[key] = [float(s.extra_stats[key]) for s in states]
+            extra_stats[key] = [s.extra_stats[key] for s in states]
         return cls(
             it=[s.it for s in states],
             acceptance_rate=[s.acceptance_rate for s in states],
