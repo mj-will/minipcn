@@ -3,7 +3,7 @@ requires = ["setuptools>=45", "setuptools-scm[toml]>=6.2"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "minicrank"
+name = "minipcn"
 authors = [
     {name = "Michael J. Williams", email = "michaeljw1@googlemail.com"},
 ]

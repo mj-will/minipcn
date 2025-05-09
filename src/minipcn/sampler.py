@@ -8,7 +8,7 @@ from .utils import ChainState, ChainStateHistory
 
 
 class Sampler:
-    """Class for running the MiniCrank sampler.
+    """Class for running the MiniPCN sampler.
 
     Parameters
     ----------
