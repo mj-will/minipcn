@@ -1,5 +1,5 @@
-from minicrank import Sampler
-from minicrank.step import TPCNStep
+from minipcn import Sampler
+from minipcn.step import TPCNStep
 
 
 def test_sampling_with_tcpn(rng, log_target_fn):
