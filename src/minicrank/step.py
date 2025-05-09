@@ -11,7 +11,7 @@ class Step:
     def initialise(self, x: np.ndarray):
         pass
 
-    def update(self, state: ChainState):
+    def update(self, state: ChainState, samples: np.ndarray):
         pass
 
     def update_state(self, state: ChainState) -> ChainState:
@@ -40,13 +40,12 @@ class TPCNStep(Step):
         self.inv_cov = np.linalg.inv(self.cov)
         self.chol_cov = np.linalg.cholesky(self.cov)
 
-    def update(self, state):
+    def update(self, state, samples):
+        delta = state.acceptance_rate - state.target_acceptance_rate
+        step_size = 1 / (state.it + 1) ** 0.75
         self.rho = np.abs(
             np.minimum(
-                self.rho
-                + 1
-                / (state.it + 1) ** 0.75
-                * (state.acceptance_rate - state.target_acceptance_rate),
+                self.rho + step_size * delta,
                 np.minimum(2.38 / self.dims**0.5, 0.99),
             )
         )

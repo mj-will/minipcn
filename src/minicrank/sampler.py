@@ -75,9 +75,9 @@ class Sampler:
         states = []
         with trange(n_steps, desc="Sampling", unit="step", disable=not verbose) as pbar:
             for i in pbar:
-                x_new, log_jac = self.step_fn(x)
+                x_new, log_alpha_step = self.step_fn(x)
                 log_prob_x_new = self.log_prob_fn(x_new)
-                log_alpha = log_prob_x_new + log_jac - log_prob_x
+                log_alpha = log_prob_x_new - log_prob_x + log_alpha_step
                 alpha = np.exp(np.minimum(0, log_alpha))  # Shape: (N,)
 
                 accept = self.rng.uniform(size=len(x_new)) < alpha
@@ -90,7 +90,7 @@ class Sampler:
                     acceptance_rate=float(np.mean(accept)),
                     target_acceptance_rate=self.target_acceptance_rate,
                 )
-                self.step_fn.update(state)
+                self.step_fn.update(state, x)
                 state = self.step_fn.update_state(state)
                 states.append(state)
                 pbar_dict = {
