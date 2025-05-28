@@ -1,4 +1,4 @@
-from typing import Callable
+from typing import Callable, Union
 
 import numpy as np
 from tqdm import trange
@@ -31,7 +31,7 @@ class Sampler:
     def __init__(
         self,
         log_prob_fn: Callable,
-        step_fn: Step | str,
+        step_fn: Union[Step, str],
         rng: np.random.Generator,
         dims: int,
         target_acceptance_rate: float = 0.234,
