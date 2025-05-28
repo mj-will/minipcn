@@ -8,6 +8,22 @@ from scipy.special import psi
 
 @dataclass
 class ChainState:
+    """State of the chain at a given iteration.
+
+    Attributes
+    ----------
+    it : int
+        Current iteration number.
+    acceptance_rate : float
+        Acceptance rate of the current iteration.
+    target_acceptance_rate : float
+        Target acceptance rate for the chain.
+    step : str
+        Name of the step function used in this iteration.
+    extra_stats : Dict[str, Any]
+        Additional statistics collected during the iteration.
+    """
+
     it: int
     acceptance_rate: float
     target_acceptance_rate: float
@@ -66,6 +82,28 @@ class ChainStateHistory:
 
 
 def fit_student_t_em(x, nu_init=10.0, tol=1e-5, max_iter=1000):
+    """Fit a multivariate Student's t-distribution using EM algorithm.
+
+    Parameters
+    ----------
+    x : np.ndarray
+        Samples of shape (n_samples, n_dims).
+    nu_init : float, optional
+        Initial degrees of freedom for the Student's t-distribution. Default is 10.0.
+    tol : float, optional
+        Tolerance for convergence of the degrees of freedom. Default is 1e-5.
+    max_iter : int, optional
+        Maximum number of iterations for the EM algorithm. Default is 1000.
+
+    Returns
+    -------
+    mu : np.ndarray
+        Mean of the fitted Student's t-distribution, shape (n_dims,).
+    sigma : np.ndarray
+        Covariance matrix of the fitted Student's t-distribution, shape (n_dims, n_dims).
+    nu : float
+        Estimated degrees of freedom of the Student's t-distribution.
+    """
     n_samples, dims = x.shape
     t = 0
     mu = x.mean(axis=0)
@@ -126,3 +164,24 @@ def fit_student_t_em(x, nu_init=10.0, tol=1e-5, max_iter=1000):
         t += 1
 
     return mu, sigma, nu
+
+
+def fit_gaussian(x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Fit a multivariate Gaussian to the samples.
+
+    Parameters
+    ----------
+    x : np.ndarray
+        Samples of shape (n_samples, n_dims).
+
+    Returns
+    -------
+    mu : np.ndarray
+        Mean of the fitted Gaussian, shape (n_dims,).
+    cov : np.ndarray
+        Covariance matrix of the fitted Gaussian, shape (n_dims, n_dims).
+    """
+    mu = x.mean(axis=0)
+    cov = np.cov(x.T, bias=False)
+    return mu, cov

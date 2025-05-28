@@ -4,6 +4,16 @@ from .utils import ChainState
 
 
 class Step:
+    """Base class for a step in the MiniPCN sampler.
+
+    Parameters
+    ----------
+    dims : int
+        Number of dimensions of the target distribution.
+    rng : np.random.Generator
+        Random number generator.
+    """
+
     def __init__(self, dims: int, rng: np.random.Generator):
         self.dims = dims
         self.rng = rng
@@ -25,7 +35,22 @@ class Step:
         return self.step(*args, **kwargs)
 
 
-class TPCNStep(Step):
+class PCNStep(Step):
+    """Preconditioned Crank-Nicolson step.
+
+    This uses the standard pCN proposal.
+
+    Parameters
+    ----------
+    dims : int
+        Number of dimensions of the target distribution.
+    rng : np.random.Generator
+        Random number generator.
+    rho : float, optional
+        pCN step size parameter, must be in the range (0, 1). Default is 0.5.
+        See https://arxiv.org/abs/2407.07781 for details.
+    """
+
     def __init__(self, dims, rng, rho: float = 0.5):
         super().__init__(dims, rng)
 
@@ -34,9 +59,9 @@ class TPCNStep(Step):
         self.rho = rho
 
     def initialise(self, x):
-        from .utils import fit_student_t_em
+        from .utils import fit_gaussian
 
-        self.mu, self.cov, self.nu = fit_student_t_em(x)
+        self.mu, self.cov = fit_gaussian(x)
         self.inv_cov = np.linalg.inv(self.cov)
         self.chol_cov = np.linalg.cholesky(self.cov)
 
@@ -54,6 +79,55 @@ class TPCNStep(Step):
         state = super().update_state(state)
         state.extra_stats["rho"] = self.rho
         return state
+
+    def step(self, x):
+        n_samples = x.shape[0]
+        diff = x - self.mu  # (N, D)
+
+        # Sample W_m ~ N(0, C)
+        z = self.rng.normal(size=(n_samples, self.dims))
+        w = (self.chol_cov @ z.T).T  # (N, D)
+
+        # Proposed new samples x'
+        x_prime = self.mu + np.sqrt(1 - self.rho**2) * diff + self.rho * w
+
+        # Evaluate the log proposal density:
+        # Since C is constant, we can ignore normalizing terms for computing alpha.
+
+        diff_prime = x_prime - self.mu
+
+        # Mahalanobis distances
+        m_x = np.einsum("ni,ij,nj->n", diff, self.inv_cov, diff)
+        m_xp = np.einsum("ni,ij,nj->n", diff_prime, self.inv_cov, diff_prime)
+
+        log_alpha = -0.5 * (m_x - m_xp)
+
+        return x_prime, log_alpha
+
+
+class TPCNStep(PCNStep):
+    """t-preconditioned Crank-Nicolson step.
+
+    This uses a Student-t distribution for the proposal. See
+    https://arxiv.org/abs/2407.07781 for details.
+
+    Parameters
+    ----------
+    dims : int
+        Number of dimensions of the target distribution.
+    rng : np.random.Generator
+        Random number generator.
+    rho : float, optional
+        pCN step size parameter, must be in the range (0, 1). Default is 0.5.
+        See https://arxiv.org/abs/2407.07781 for details.
+    """
+
+    def initialise(self, x):
+        from .utils import fit_student_t_em
+
+        self.mu, self.cov, self.nu = fit_student_t_em(x)
+        self.inv_cov = np.linalg.inv(self.cov)
+        self.chol_cov = np.linalg.cholesky(self.cov)
 
     def step(self, x):
         n_samples = x.shape[0]
@@ -85,3 +159,28 @@ class TPCNStep(Step):
         )
         log_alpha = log_a_num - log_a_denom
         return x_prime, log_alpha
+
+
+def step_factory(
+    step_name: str, dims: int, rng: np.random.Generator, **kwargs
+):
+    """
+    Factory function to create a step instance based on the step name.
+
+    Parameters
+    ----------
+    step_name : {"pCN", "tPCN"}
+        Name of the step type.
+    dims : int
+        Number of dimensions of the target distribution.
+    rng : np.random.Generator
+        Random number generator.
+    **kwargs : dict
+        Additional keyword arguments to pass to the step constructor.
+    """
+    if step_name.lower() == "pcn":
+        return PCNStep(dims=dims, rng=rng, **kwargs)
+    elif step_name.lower() == "tpcn":
+        return TPCNStep(dims=dims, rng=rng, **kwargs)
+    else:
+        raise ValueError(f"Unknown step type: {step_name}")

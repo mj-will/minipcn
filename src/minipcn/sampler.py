@@ -16,9 +16,10 @@ class Sampler:
         Function to compute the log probability of the target distribution.
         It should take a single argument (the samples) and return the log
         probability.
-    step_fn : Step
+    step_fn : Step | str
         Step object that defines the proposal distribution and the
-        transformation to the target distribution.
+        transformation to the target distribution. If a string is provided,
+        it should be the name of a known step type (e.g., "pCN" or "tpCN").
     rng : np.random.Generator
         Random number generator for reproducibility.
     dims : int
@@ -30,12 +31,19 @@ class Sampler:
     def __init__(
         self,
         log_prob_fn: Callable,
-        step_fn: Step,
+        step_fn: Step | str,
         rng: np.random.Generator,
         dims: int,
         target_acceptance_rate: float = 0.234,
+        **kwargs,
     ) -> None:
         self.log_prob_fn = log_prob_fn
+
+        if isinstance(step_fn, str):
+            from .step import step_factory
+
+            step_fn = step_factory(step_fn, dims, rng, **kwargs)
+
         self.step_fn = step_fn
         self.rng = rng
         self.dims = dims
