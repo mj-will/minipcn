@@ -3,7 +3,6 @@ import numpy as np
 from scipy import stats
 
 from minipcn import Sampler
-from minipcn.step import TPCNStep
 
 rng = np.random.default_rng(seed=42)
 
@@ -22,7 +21,7 @@ x_init = rng.normal(size=(1000, dims))  # Initial samples
 sampler = Sampler(
     log_prob_fn=log_target_fn,
     dims=dims,
-    step_fn=TPCNStep(dims=dims, rng=rng, rho=0.5),
+    step_fn="tpCN",
     rng=rng,
     target_acceptance_rate=0.234,
 )
