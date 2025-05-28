@@ -2,8 +2,8 @@ import corner
 import numpy as np
 from scipy import stats
 
-from minicrank import Sampler
-from minicrank.step import TPCNStep
+from minipcn import Sampler
+from minipcn.step import TPCNStep
 
 rng = np.random.default_rng(seed=42)
 
