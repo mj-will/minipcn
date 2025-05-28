@@ -16,3 +16,8 @@ def log_target_fn():
         return -0.5 * np.sum(x**2, axis=-1)
 
     return _log_target_fn
+
+
+@pytest.fixture(params=["tpCN", "pCN"])
+def step_fn(request):
+    return request.param
