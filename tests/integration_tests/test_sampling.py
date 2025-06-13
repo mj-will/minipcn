@@ -1,7 +1,7 @@
 from minipcn import Sampler
 
 
-def test_sampling_with_tcpn(rng, log_target_fn, step_fn):
+def test_sampling(rng, log_target_fn, step_fn):
     dims = 4
     x_init = rng.normal(size=(100, dims))  # Initial samples
 
