@@ -21,3 +21,12 @@ def log_target_fn():
 @pytest.fixture(params=["tpCN", "pCN"])
 def step_fn(request):
     return request.param
+
+
+@pytest.fixture
+def close_figures():
+    """Fixture to close all matplotlib figures after each test."""
+    yield
+    import matplotlib.pyplot as plt
+
+    plt.close("all")
