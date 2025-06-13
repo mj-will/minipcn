@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Union
 
 import numpy as np
 from scipy.optimize import minimize_scalar
@@ -38,6 +38,29 @@ class ChainStateHistory:
     target_acceptance_rate: List[float]
     step: str = ""
     extra_stats: Dict[str, List[Any]] = field(default_factory=dict)
+
+    def __getitem__(self, index: Union[int, slice]) -> "ChainStateHistory":
+        # Support slicing or single index
+        if isinstance(index, int):
+            return ChainStateHistory(
+                it=[self.it[index]],
+                acceptance_rate=[self.acceptance_rate[index]],
+                target_acceptance_rate=[self.target_acceptance_rate[index]],
+                step=self.step,
+                extra_stats={
+                    k: [v[index]] for k, v in self.extra_stats.items()
+                },
+            )
+        elif isinstance(index, slice):
+            return ChainStateHistory(
+                it=self.it[index],
+                acceptance_rate=self.acceptance_rate[index],
+                target_acceptance_rate=self.target_acceptance_rate[index],
+                step=self.step,
+                extra_stats={k: v[index] for k, v in self.extra_stats.items()},
+            )
+        else:
+            raise TypeError(f"Invalid index type: {type(index)}")
 
     @classmethod
     def from_chain_states(
