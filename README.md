@@ -1,14 +1,15 @@
 # minipcn
 
+[![DOI](https://zenodo.org/badge/975531339.svg)](https://doi.org/10.5281/zenodo.15657997)
+
 A minimalistic implementation of preconditioned Crank-Nicolson MCMC sampling.
 
 ## Installation
 
-Currently, the `minipcn` is only available to install from source. Clone the
-repo and then run:
+`minipcn` can be installed using from PyPI using `pip`:
 
 ```bash
-pip install .
+pip install minipcn
 ```
 
 ## Usage
