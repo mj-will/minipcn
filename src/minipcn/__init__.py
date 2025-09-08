@@ -1,6 +1,6 @@
 """minipcn
 
-A minimalistic implementation of preconditioned Crank-Nicolson (pCN) and
+A minimal implementation of preconditioned Crank-Nicolson (pCN) and
 t-preconditioned Crank-Nicolson (tpCN) MCMC samplers for Bayesian inference.
 """
 

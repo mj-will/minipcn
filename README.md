@@ -2,7 +2,7 @@
 
 [![DOI](https://zenodo.org/badge/975531339.svg)](https://doi.org/10.5281/zenodo.15657997)
 
-A minimalistic implementation of preconditioned Crank-Nicolson MCMC sampling.
+A minimal implementation of preconditioned Crank-Nicolson MCMC sampling.
 
 ## Installation
 
