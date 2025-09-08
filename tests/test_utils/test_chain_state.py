@@ -80,7 +80,7 @@ def test_chain_state_history_getitem_invalid_type(sample_chain_states):
         _ = history["not an index"]
 
 
-@pytest.mark.autouse("close_figures")
+@pytest.mark.usefixtures("close_figures")
 def test_plot_acceptance_rate(sample_chain_states):
     history = ChainStateHistory.from_chain_states(sample_chain_states)
     fig = history.plot_acceptance_rate()
@@ -88,7 +88,7 @@ def test_plot_acceptance_rate(sample_chain_states):
     assert isinstance(fig, matplotlib.figure.Figure)
 
 
-@pytest.mark.autouse("close_figures")
+@pytest.mark.usefixtures("close_figures")
 def test_plot_extra_stat(sample_chain_states):
     history = ChainStateHistory.from_chain_states(sample_chain_states)
     fig = history.plot_extra_stat("energy")
