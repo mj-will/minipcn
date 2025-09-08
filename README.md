@@ -32,10 +32,16 @@ sampler = Sampler(
 )
 
 # Generate initial samples
-x0 = rng.randn(size=(100, dims)
+x0 = rng.randn(size=(100, dims))
 
 # Run the sampler
 chain, history = sampler.run(x0, n_steps=500)
 ```
 
 For a complete example, see the `examples` directory.
+
+## Citing minipcn
+
+If you use `minipcn` in your work, please cite our [DOI](https://doi.org/10.5281/zenodo.15657997)
+
+If using the `tpcn` kernel, please also cite [Grumitt et al](https://arxiv.org/abs/2407.07781)
