@@ -127,44 +127,46 @@ def fit_student_t_em(x, nu_init=10.0, tol=1e-5, max_iter=1000):
     nu : float
         Estimated degrees of freedom of the Student's t-distribution.
     """
+    # Ensure x is 2D
+    x = np.atleast_2d(x)
+    if x.shape[0] == 1 and x.shape[1] > 1:
+        x = x.T
     n_samples, dims = x.shape
-    t = 0
+
     mu = x.mean(axis=0)
-    sigma = np.cov(x.T)
+    sigma = np.cov(x.T) if dims > 1 else np.var(x, ddof=1)
     nu = nu_init
 
-    def mahalanobis(x, mu, Sigma_inv):
-        diff = x - mu
-        return diff @ Sigma_inv @ diff.T
+    def mahalanobis(xi, mu, sigma_inv):
+        diff = xi - mu
+        if dims == 1:
+            return float(diff.item() ** 2 * sigma_inv.item())
+        return float(diff @ sigma_inv @ diff.T)
 
-    while t < max_iter:
-        sigma_inv = np.linalg.inv(sigma)
+    for _ in range(max_iter):
+        # Invert covariance
+        sigma_inv = 1.0 / sigma if dims == 1 else np.linalg.inv(sigma)
 
-        # Step 4: Compute δ_i^(t)
+        # comput weights
         delta = np.array([mahalanobis(xi, mu, sigma_inv) for xi in x])
-
-        # Step 5: Compute w_i^(t+1)
         w = (nu + dims) / (nu + delta)
 
-        # Step 6: Update μ^(t+1)
+        # update mu
         mu_new = np.sum(w[:, None] * x, axis=0) / np.sum(w)
 
-        # Update Σ^(t+1)
-        diff = x - mu
-        sigma_new = (
-            w[:, None, None] * np.einsum("ni,nj->nij", diff, diff)
-        ).sum(axis=0) / n_samples
+        # Update covariance
+        diff = x - mu_new
+        if dims == 1:
+            sigma_new = np.sum(w * diff[:, 0] ** 2) / n_samples
+        else:
+            sigma_new = (
+                w[:, None, None] * np.einsum("ni,nj->nij", diff, diff)
+            ).sum(axis=0) / n_samples
 
-        # Step 7: Recompute δ_i^(t+1)
-        Sigma_new_inv = np.linalg.inv(sigma_new)
-        delta_new = np.array(
-            [mahalanobis(xi, mu_new, Sigma_new_inv) for xi in x]
-        )
-
-        # Step 8: Update w_i again for ν update
+        # Update nu via scalar minimization
+        delta_new = np.array([mahalanobis(xi, mu_new, sigma_inv) for xi in x])
         w_i_nu = (nu + dims) / (nu + delta_new)
 
-        # Step 9: Solve for ν using minimization (robust)
         def nu_equation(nu_val):
             term1 = -psi(nu_val / 2) + np.log(nu_val / 2)
             term2 = np.mean(np.log(w_i_nu) - w_i_nu)
@@ -176,15 +178,18 @@ def fit_student_t_em(x, nu_init=10.0, tol=1e-5, max_iter=1000):
             bounds=(1e-3, 1e6),
             method="bounded",
         )
-        nu_new = res.x if res.success else nu  # fallback if minimization fails
+        nu_new = res.x if res.success else nu
 
-        # Convergence check
         if abs(nu_new - nu) < tol:
+            mu, sigma, nu = mu_new, sigma_new, nu_new
             break
 
-        # Update parameters
         mu, sigma, nu = mu_new, sigma_new, nu_new
-        t += 1
+
+    # Return scalar for 1D
+    if dims == 1:
+        mu = mu.item()
+        sigma = float(sigma)
 
     return mu, sigma, nu
 

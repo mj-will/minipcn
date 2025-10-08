@@ -1,8 +1,7 @@
 from minipcn import Sampler
 
 
-def test_sampling(rng, log_target_fn, step_fn):
-    dims = 4
+def test_sampling(rng, log_target_fn, step_fn, dims):
     x_init = rng.normal(size=(100, dims))  # Initial samples
 
     sampler = Sampler(
@@ -14,5 +13,5 @@ def test_sampling(rng, log_target_fn, step_fn):
     )
 
     chain, history = sampler.sample(x_init, n_steps=100)
-    assert chain.shape == (101, 100, 4)
+    assert chain.shape == (101, 100, dims)
     assert history.it[-1] == 99
