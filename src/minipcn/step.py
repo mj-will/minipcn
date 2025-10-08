@@ -62,8 +62,12 @@ class PCNStep(Step):
         from .utils import fit_gaussian
 
         self.mu, self.cov = fit_gaussian(x)
-        self.inv_cov = np.linalg.inv(self.cov)
-        self.chol_cov = np.linalg.cholesky(self.cov)
+        if self.dims == 1:
+            self.inv_cov = np.atleast_2d(1.0 / self.cov)
+            self.chol_cov = np.atleast_2d(np.sqrt(self.cov))
+        else:
+            self.inv_cov = np.linalg.inv(self.cov)
+            self.chol_cov = np.linalg.cholesky(self.cov)
 
     def update(self, state, samples):
         delta = state.acceptance_rate - state.target_acceptance_rate
@@ -126,8 +130,12 @@ class TPCNStep(PCNStep):
         from .utils import fit_student_t_em
 
         self.mu, self.cov, self.nu = fit_student_t_em(x)
-        self.inv_cov = np.linalg.inv(self.cov)
-        self.chol_cov = np.linalg.cholesky(self.cov)
+        if self.dims == 1:
+            self.inv_cov = np.atleast_2d(1.0 / self.cov)
+            self.chol_cov = np.atleast_2d(np.sqrt(self.cov))
+        else:
+            self.inv_cov = np.linalg.inv(self.cov)
+            self.chol_cov = np.linalg.cholesky(self.cov)
 
     def step(self, x):
         n_samples = x.shape[0]
