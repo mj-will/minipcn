@@ -8,6 +8,11 @@ def rng():
     return np.random.default_rng(seed=42)
 
 
+@pytest.fixture(params=[1, 4])
+def dims(request):
+    return request.param
+
+
 @pytest.fixture
 def log_target_fn():
     """Fixture to provide a log target function."""
