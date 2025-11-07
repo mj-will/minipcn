@@ -9,7 +9,7 @@ authors = [
 ]
 description = "A minimal preconditioned Crank-Nicolson MCMC sampler"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = {text = "MIT"}
 classifiers = [
     "Programming Language :: Python :: 3",
@@ -24,8 +24,14 @@ dependencies = [
 dynamic = ["version"]
 
 [project.optional-dependencies]
+array-api = [
+    "array-api-compat",
+    "orng>=0.1.0a2",
+]
+
+[dependency-groups]
 test = [
-    "pytest",
+    "pytest>=7.0",
 ]
 
 [tool.setuptools_scm]
@@ -33,7 +39,7 @@ test = [
 [tool.ruff]
 line-length = 79
 indent-width = 4
-target-version = "py39"
+target-version = "py310"
 
 [tool.ruff.lint]
 # Allow fix for all enabled rules (when `--fix`) is provided.
