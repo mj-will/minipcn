@@ -148,7 +148,9 @@ class TPCNStep(PCNStep):
         diff = x - self.mu  # Shape: (N, D)
 
         # Mahalanobis distances
-        xx = self.xp.einsum("ni,ij,nj->n", diff, self.inv_cov, diff)  # Shape: (N,)
+        xx = self.xp.einsum(
+            "ni,ij,nj->n", diff, self.inv_cov, diff
+        )  # Shape: (N,)
         k = 0.5 * (self.dims + self.nu)
         theta = 2 / (self.nu + xx)
         z_inv = 1 / self.rng.gamma(shape=k, scale=theta)  # Shape: (N,)
@@ -159,7 +161,9 @@ class TPCNStep(PCNStep):
             (self.xp.sqrt(z_inv)[:, None]) * (self.chol_cov @ z.T).T
         )  # Shape: (N, D)
         x_prime = (
-            self.mu + self.xp.sqrt(self.xp.asarray(1 - self.rho**2)) * diff + self.rho * scaled_noise
+            self.mu
+            + self.xp.sqrt(self.xp.asarray(1 - self.rho**2)) * diff
+            + self.rho * scaled_noise
         )  # Shape: (N, D)
 
         diff_prime = x_prime - self.mu
@@ -167,7 +171,9 @@ class TPCNStep(PCNStep):
             "ni,ij,nj->n", diff_prime, self.inv_cov, diff_prime
         )
 
-        log_a_num = (-0.5 * (self.nu + self.dims)) * self.xp.log1p(xx / self.nu)
+        log_a_num = (-0.5 * (self.nu + self.dims)) * self.xp.log1p(
+            xx / self.nu
+        )
         log_a_denom = (-0.5 * (self.nu + self.dims)) * self.xp.log1p(
             xx_prime / self.nu
         )

@@ -5,7 +5,8 @@ from typing import Any, Dict, List, Union
 import numpy as np
 
 try:
-    from array_api_compat import array_namespace, device as get_device
+    from array_api_compat import array_namespace
+    from array_api_compat import device as get_device
 except ImportError:
     logging.warning(
         "array_api_compat is not installed. Falling back to numpy for array namespace."
@@ -15,7 +16,7 @@ except ImportError:
         import numpy as np
 
         return np
-    
+
     def get_device(x: Any) -> None:
         return None
 
