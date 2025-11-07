@@ -35,6 +35,11 @@ class Sampler:
         Number of dimensions of the target distribution.
     target_acceptance_rate : float, optional
         Target acceptance rate for the sampler. Default is 0.234.
+    xp : Any, optional
+        Array namespace to use (e.g., numpy, jax.numpy, torch). Default is numpy.
+    **kwargs
+        Additional keyword arguments to pass to the step function if `step_fn`
+        is provided as a string.
     """
 
     def __init__(
