@@ -24,8 +24,14 @@ dependencies = [
 dynamic = ["version"]
 
 [project.optional-dependencies]
+array-api = [
+    "array-api-compat",
+    "orng",
+]
+
+[dependency-groups]
 test = [
-    "pytest",
+    "pytest>=7.0",
 ]
 
 [tool.setuptools_scm]
