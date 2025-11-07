@@ -1,4 +1,4 @@
-from typing import Any, Callable, Union
+from typing import TYPE_CHECKING, Any, Callable, Union
 
 import numpy as np
 from tqdm import trange
@@ -6,6 +6,12 @@ from tqdm import trange
 from ._typing import Array
 from .step import Step
 from .utils import ChainState, ChainStateHistory
+
+if TYPE_CHECKING:
+    try:
+        from orng import ArrayRNG
+    except ImportError:
+        ArrayRNG = Any
 
 
 class Sampler:
@@ -21,7 +27,7 @@ class Sampler:
         Step object that defines the proposal distribution and the
         transformation to the target distribution. If a string is provided,
         it should be the name of a known step type (e.g., "pCN" or "tpCN").
-    rng : np.random.Generator
+    rng : np.random.Generator | ArrayRNG
         Random number generator for reproducibility.
     dims : int
         Number of dimensions of the target distribution.
@@ -33,7 +39,7 @@ class Sampler:
         self,
         log_prob_fn: Callable,
         step_fn: Union[Step, str],
-        rng: np.random.Generator,
+        rng: "ArrayRNG" | np.random.Generator,
         dims: int,
         target_acceptance_rate: float = 0.234,
         xp: Any = np,

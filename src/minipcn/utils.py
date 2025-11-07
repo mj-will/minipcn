@@ -1,8 +1,25 @@
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Union
 
 import numpy as np
-from array_api_compat import array_namespace, device as get_device
+
+try:
+    from array_api_compat import array_namespace, device as get_device
+except ImportError:
+    logging.warning(
+        "array_api_compat is not installed. Falling back to numpy for array namespace."
+    )
+
+    def array_namespace(x: Any) -> Any:
+        import numpy as np
+
+        return np
+    
+    def get_device(x: Any) -> None:
+        return None
+
+
 from scipy.linalg import solve_triangular
 from scipy.optimize import root_scalar
 from scipy.special import polygamma, psi
@@ -271,9 +288,14 @@ def fit_student_t_em(
         mu = mu.item()
         sigma = float(sigma)
 
-    mu = xp.asarray(mu, dtype=dtype, device=device)
-    sigma = xp.asarray(sigma, dtype=dtype, device=device)
-    nu = xp.asarray(nu, dtype=dtype, device=device)
+    if device is not None:
+        mu = xp.asarray(mu, dtype=dtype, device=device)
+        sigma = xp.asarray(sigma, dtype=dtype, device=device)
+        nu = xp.asarray(nu, dtype=dtype, device=device)
+    else:
+        mu = xp.asarray(mu, dtype=dtype)
+        sigma = xp.asarray(sigma, dtype=dtype)
+        nu = xp.asarray(nu, dtype=dtype)
 
     return mu, sigma, nu
 
