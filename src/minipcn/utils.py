@@ -319,5 +319,5 @@ def fit_gaussian(x: Array) -> tuple[Array, Array]:
     """
     xp = array_namespace(x)
     mu = xp.mean(x, axis=0)
-    cov = xp.cov(x.T, bias=False)
+    cov = xp.cov(x.T)
     return mu, cov

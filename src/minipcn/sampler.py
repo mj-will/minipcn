@@ -86,13 +86,11 @@ class Sampler:
         state_history : ChainStateHistory
             History of the chain states during the sampling process.
         """
-        x = x_init
+        x = self.xp.atleast_2d(x_init)
         self.step_fn.initialise(x)
         log_prob_x = self.log_prob_fn(x)  # Shape: (N,)
-        chain = self.xp.empty(
-            (n_steps + 1, x.shape[0], x.shape[1]), dtype=x.dtype
-        )
-        chain[0] = x
+        # Accumulate states functionally to avoid in-place updates (e.g. JAX)
+        chain_states: list[Array] = [x]
         states = []
         with trange(
             n_steps, desc="Sampling", unit="step", disable=not verbose
@@ -108,7 +106,7 @@ class Sampler:
                 accept = self.rng.uniform(size=len(x_new)) < alpha
                 x = self.xp.where(accept[:, None], x_new, x)  # Shape: (N, D)
                 log_prob_x = self.xp.where(accept, log_prob_x_new, log_prob_x)
-                chain[i + 1] = x
+                chain_states.append(x)
 
                 state = ChainState(
                     it=i,
@@ -124,5 +122,6 @@ class Sampler:
                 pbar_dict.update(state.extra_stats)
                 pbar.set_postfix(pbar_dict)
 
+        chain = self.xp.stack(chain_states, axis=0)
         state_history = ChainStateHistory.from_chain_states(states)
         return chain, state_history

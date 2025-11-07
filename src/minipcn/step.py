@@ -97,7 +97,11 @@ class PCNStep(Step):
         w = (self.chol_cov @ z.T).T  # (N, D)
 
         # Proposed new samples x'
-        x_prime = self.mu + self.xp.sqrt(1 - self.rho**2) * diff + self.rho * w
+        x_prime = (
+            self.mu
+            + self.xp.sqrt(self.xp.asarray(1 - self.rho**2)) * diff
+            + self.rho * w
+        )
 
         # Evaluate the log proposal density:
         # Since C is constant, we can ignore normalizing terms for computing alpha.
@@ -153,7 +157,9 @@ class TPCNStep(PCNStep):
         )  # Shape: (N,)
         k = 0.5 * (self.dims + self.nu)
         theta = 2 / (self.nu + xx)
+        print(theta.shape)
         z_inv = 1 / self.rng.gamma(shape=k, scale=theta)  # Shape: (N,)
+        print(k, z_inv.shape)
 
         # Propose new samples
         z = self.rng.normal(size=(n_samples, self.dims))
