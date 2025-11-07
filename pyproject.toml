@@ -9,7 +9,7 @@ authors = [
 ]
 description = "A minimal preconditioned Crank-Nicolson MCMC sampler"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = {text = "MIT"}
 classifiers = [
     "Programming Language :: Python :: 3",
