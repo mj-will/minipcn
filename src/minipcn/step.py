@@ -1,5 +1,8 @@
+from typing import Any
+
 import numpy as np
 
+from ._typing import Array
 from .utils import ChainState
 
 
@@ -14,21 +17,22 @@ class Step:
         Random number generator.
     """
 
-    def __init__(self, dims: int, rng: np.random.Generator):
+    def __init__(self, dims: int, rng: np.random.Generator, xp: Any):
         self.dims = dims
         self.rng = rng
+        self.xp = xp
 
-    def initialise(self, x: np.ndarray):
+    def initialise(self, x: Array):
         pass
 
-    def update(self, state: ChainState, samples: np.ndarray):
+    def update(self, state: ChainState, samples: Array):
         pass
 
     def update_state(self, state: ChainState) -> ChainState:
         state.step = self.__class__.__name__
         return state
 
-    def step(self, x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    def step(self, x: Array) -> tuple[Array, Array]:
         raise NotImplementedError("Subclasses should implement this method.")
 
     def __call__(self, *args, **kwargs):
@@ -51,8 +55,8 @@ class PCNStep(Step):
         See https://arxiv.org/abs/2407.07781 for details.
     """
 
-    def __init__(self, dims, rng, rho: float = 0.5):
-        super().__init__(dims, rng)
+    def __init__(self, dims, rng, xp, rho: float = 0.5):
+        super().__init__(dims, rng, xp)
 
         if not (0 < rho < 1):
             raise ValueError("rho must be in the range (0, 1).")
@@ -63,11 +67,11 @@ class PCNStep(Step):
 
         self.mu, self.cov = fit_gaussian(x)
         if self.dims == 1:
-            self.inv_cov = np.atleast_2d(1.0 / self.cov)
-            self.chol_cov = np.atleast_2d(np.sqrt(self.cov))
+            self.inv_cov = self.xp.atleast_2d(1.0 / self.cov)
+            self.chol_cov = self.xp.atleast_2d(self.xp.sqrt(self.cov))
         else:
-            self.inv_cov = np.linalg.inv(self.cov)
-            self.chol_cov = np.linalg.cholesky(self.cov)
+            self.inv_cov = self.xp.linalg.inv(self.cov)
+            self.chol_cov = self.xp.linalg.cholesky(self.cov)
 
     def update(self, state, samples):
         delta = state.acceptance_rate - state.target_acceptance_rate
@@ -93,7 +97,7 @@ class PCNStep(Step):
         w = (self.chol_cov @ z.T).T  # (N, D)
 
         # Proposed new samples x'
-        x_prime = self.mu + np.sqrt(1 - self.rho**2) * diff + self.rho * w
+        x_prime = self.mu + self.xp.sqrt(1 - self.rho**2) * diff + self.rho * w
 
         # Evaluate the log proposal density:
         # Since C is constant, we can ignore normalizing terms for computing alpha.
@@ -101,8 +105,10 @@ class PCNStep(Step):
         diff_prime = x_prime - self.mu
 
         # Mahalanobis distances
-        m_x = np.einsum("ni,ij,nj->n", diff, self.inv_cov, diff)
-        m_xp = np.einsum("ni,ij,nj->n", diff_prime, self.inv_cov, diff_prime)
+        m_x = self.xp.einsum("ni,ij,nj->n", diff, self.inv_cov, diff)
+        m_xp = self.xp.einsum(
+            "ni,ij,nj->n", diff_prime, self.inv_cov, diff_prime
+        )
 
         log_alpha = -0.5 * (m_x - m_xp)
 
@@ -131,11 +137,11 @@ class TPCNStep(PCNStep):
 
         self.mu, self.cov, self.nu = fit_student_t_em(x)
         if self.dims == 1:
-            self.inv_cov = np.atleast_2d(1.0 / self.cov)
-            self.chol_cov = np.atleast_2d(np.sqrt(self.cov))
+            self.inv_cov = self.xp.atleast_2d(1.0 / self.cov)
+            self.chol_cov = self.xp.atleast_2d(self.xp.sqrt(self.cov))
         else:
-            self.inv_cov = np.linalg.inv(self.cov)
-            self.chol_cov = np.linalg.cholesky(self.cov)
+            self.inv_cov = self.xp.linalg.inv(self.cov)
+            self.chol_cov = self.xp.linalg.cholesky(self.cov)
 
     def step(self, x):
         n_samples = x.shape[0]
@@ -170,7 +176,7 @@ class TPCNStep(PCNStep):
 
 
 def step_factory(
-    step_name: str, dims: int, rng: np.random.Generator, **kwargs
+    step_name: str, dims: int, rng: np.random.Generator, xp, **kwargs
 ):
     """
     Factory function to create a step instance based on the step name.
@@ -187,8 +193,8 @@ def step_factory(
         Additional keyword arguments to pass to the step constructor.
     """
     if step_name.lower() == "pcn":
-        return PCNStep(dims=dims, rng=rng, **kwargs)
+        return PCNStep(dims=dims, rng=rng, xp=xp, **kwargs)
     elif step_name.lower() == "tpcn":
-        return TPCNStep(dims=dims, rng=rng, **kwargs)
+        return TPCNStep(dims=dims, rng=rng, xp=xp, **kwargs)
     else:
         raise ValueError(f"Unknown step type: {step_name}")

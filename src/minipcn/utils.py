@@ -2,8 +2,12 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Union
 
 import numpy as np
-from scipy.optimize import minimize_scalar
-from scipy.special import psi
+from array_api_compat import array_namespace
+from scipy.linalg import solve_triangular
+from scipy.optimize import root_scalar
+from scipy.special import polygamma, psi
+
+from ._typing import Array
 
 
 @dataclass
@@ -104,12 +108,17 @@ class ChainStateHistory:
         return fig
 
 
-def fit_student_t_em(x, nu_init=10.0, tol=1e-5, max_iter=1000):
+def fit_student_t_em(
+    x: Array,
+    nu_init: float = 10.0,
+    tol: float = 1e-5,
+    max_iter: int = 1000,
+) -> tuple[Array, Array, Array]:
     """Fit a multivariate Student's t-distribution using EM algorithm.
 
     Parameters
     ----------
-    x : np.ndarray
+    x : Array
         Samples of shape (n_samples, n_dims).
     nu_init : float, optional
         Initial degrees of freedom for the Student's t-distribution. Default is 10.0.
@@ -120,67 +129,136 @@ def fit_student_t_em(x, nu_init=10.0, tol=1e-5, max_iter=1000):
 
     Returns
     -------
-    mu : np.ndarray
+    mu : Array
         Mean of the fitted Student's t-distribution, shape (n_dims,).
-    sigma : np.ndarray
+    sigma : Array
         Covariance matrix of the fitted Student's t-distribution, shape (n_dims, n_dims).
     nu : float
         Estimated degrees of freedom of the Student's t-distribution.
     """
     # Ensure x is 2D
+
+    xp = array_namespace(x)
+    dtype = x.dtype
+
+    try:
+        x = np.asarray(x)
+    except Exception:
+        # Handle e.g. torch tensors that cannot be directly converted to Array
+        x = np.asarray(x.detach().cpu())
+
     x = np.atleast_2d(x)
     if x.shape[0] == 1 and x.shape[1] > 1:
         x = x.T
     n_samples, dims = x.shape
 
     mu = x.mean(axis=0)
-    sigma = np.cov(x.T) if dims > 1 else np.var(x, ddof=1)
+    sigma = np.cov(x.T) if dims > 1 else float(np.var(x, ddof=1))
     nu = nu_init
 
-    def mahalanobis(xi, mu, sigma_inv):
-        diff = xi - mu
+    min_variance = 1e-9
+
+    def ensure_positive_definite(matrix):
         if dims == 1:
-            return float(diff.item() ** 2 * sigma_inv.item())
-        return float(diff @ sigma_inv @ diff.T)
+            # Guarantee strictly positive variance to avoid divide-by-zero.
+            adjusted = float(max(matrix, min_variance))
+            return adjusted, None
+
+        adjusted = np.array(matrix, copy=True)
+        eye = np.eye(dims)
+        scale = np.mean(np.diag(adjusted))
+        if scale <= 0:
+            scale = 1.0
+        jitter = 0.0
+        for _ in range(8):
+            try:
+                chol = np.linalg.cholesky(adjusted)
+                return adjusted, chol
+            except np.linalg.LinAlgError:
+                jitter = max(
+                    min_variance, (1e-9 if jitter == 0.0 else jitter * 10.0)
+                )
+                adjusted = adjusted + eye * (jitter * scale)
+        raise np.linalg.LinAlgError(
+            "Matrix is not positive definite even after jitter"
+        )
+
+    def mahalanobis_squared(diff_mat, chol):
+        solved = solve_triangular(
+            chol,
+            diff_mat.T,
+            lower=True,
+            check_finite=False,
+        ).T
+        return np.sum(solved**2, axis=1)
 
     for _ in range(max_iter):
-        # Invert covariance
-        sigma_inv = 1.0 / sigma if dims == 1 else np.linalg.inv(sigma)
-
-        # comput weights
-        delta = np.array([mahalanobis(xi, mu, sigma_inv) for xi in x])
-        w = (nu + dims) / (nu + delta)
-
-        # update mu
-        mu_new = np.sum(w[:, None] * x, axis=0) / np.sum(w)
-
-        # Update covariance
-        diff = x - mu_new
+        diff = x - mu
         if dims == 1:
-            sigma_new = np.sum(w * diff[:, 0] ** 2) / n_samples
+            sigma, _ = ensure_positive_definite(sigma)
+            delta = (diff[:, 0] ** 2) / sigma
         else:
-            sigma_new = (
-                w[:, None, None] * np.einsum("ni,nj->nij", diff, diff)
-            ).sum(axis=0) / n_samples
+            sigma, chol = ensure_positive_definite(sigma)
+            delta = mahalanobis_squared(diff, chol)
 
-        # Update nu via scalar minimization
-        delta_new = np.array([mahalanobis(xi, mu_new, sigma_inv) for xi in x])
+        w = (nu + dims) / (nu + delta)
+        w_sum = np.sum(w)
+        mu_new = (w[:, None] * x).sum(axis=0) / w_sum
+
+        diff_new = x - mu_new
+        if dims == 1:
+            sigma_new = float(np.dot(w, diff_new[:, 0] ** 2) / w_sum)
+            sigma_new, _ = ensure_positive_definite(sigma_new)
+            delta_new = (diff_new[:, 0] ** 2) / sigma_new
+        else:
+            sigma_new = (diff_new.T * w) @ diff_new / w_sum
+            sigma_new = 0.5 * (sigma_new + sigma_new.T)
+            sigma_new, chol_new = ensure_positive_definite(sigma_new)
+            delta_new = mahalanobis_squared(diff_new, chol_new)
+
         w_i_nu = (nu + dims) / (nu + delta_new)
+        avg_log_w_minus_w = np.mean(np.log(w_i_nu) - w_i_nu)
 
         def nu_equation(nu_val):
-            term1 = -psi(nu_val / 2) + np.log(nu_val / 2)
-            term2 = np.mean(np.log(w_i_nu) - w_i_nu)
-            term3 = psi((nu_val + dims) / 2) - np.log((nu_val + dims) / 2)
-            return term1 + term2 + term3
+            return (
+                -psi(nu_val / 2.0)
+                + np.log(nu_val / 2.0)
+                + 1.0
+                + avg_log_w_minus_w
+                + psi((nu_val + dims) / 2.0)
+                - np.log((nu_val + dims) / 2.0)
+            )
 
-        res = minimize_scalar(
-            lambda nu_val: (nu_equation(nu_val) + 1) ** 2,
-            bounds=(1e-3, 1e6),
-            method="bounded",
+        def nu_equation_prime(nu_val):
+            return (
+                -0.5 * polygamma(1, nu_val / 2.0)
+                + 1.0 / nu_val
+                + 0.5 * polygamma(1, (nu_val + dims) / 2.0)
+                - 1.0 / (nu_val + dims)
+            )
+
+        nu_new = nu
+        try:
+            root_res = root_scalar(
+                nu_equation,
+                fprime=nu_equation_prime,
+                x0=nu,
+                method="newton",
+            )
+            if root_res.converged and root_res.root > 0:
+                nu_new = root_res.root
+        except (ValueError, RuntimeError):
+            # Fall back to the previous value if Newton iteration fails.
+            pass
+
+        mu_diff = float(np.max(np.abs(mu_new - mu)))
+        sigma_diff = (
+            abs(sigma_new - sigma)
+            if dims == 1
+            else float(np.max(np.abs(sigma_new - sigma)))
         )
-        nu_new = res.x if res.success else nu
 
-        if abs(nu_new - nu) < tol:
+        if max(mu_diff, sigma_diff, abs(nu_new - nu)) < tol:
             mu, sigma, nu = mu_new, sigma_new, nu_new
             break
 
@@ -191,25 +269,30 @@ def fit_student_t_em(x, nu_init=10.0, tol=1e-5, max_iter=1000):
         mu = mu.item()
         sigma = float(sigma)
 
+    mu = xp.asarray(mu, dtype=dtype)
+    sigma = xp.asarray(sigma, dtype=dtype)
+    nu = xp.asarray(nu, dtype=dtype)
+
     return mu, sigma, nu
 
 
-def fit_gaussian(x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def fit_gaussian(x: Array) -> tuple[Array, Array]:
     """
     Fit a multivariate Gaussian to the samples.
 
     Parameters
     ----------
-    x : np.ndarray
+    x : Array
         Samples of shape (n_samples, n_dims).
 
     Returns
     -------
-    mu : np.ndarray
+    mu : Array
         Mean of the fitted Gaussian, shape (n_dims,).
-    cov : np.ndarray
+    cov : Array
         Covariance matrix of the fitted Gaussian, shape (n_dims, n_dims).
     """
-    mu = x.mean(axis=0)
-    cov = np.cov(x.T, bias=False)
+    xp = array_namespace(x)
+    mu = xp.mean(x, axis=0)
+    cov = xp.cov(x.T, bias=False)
     return mu, cov
