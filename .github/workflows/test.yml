@@ -31,7 +31,33 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -e .[test]
+        pip install -e . --group test
     - name: Test with pytest
+      run: |
+        python -m pytest
+  tests-array-api:
+    name: Array API Compatibility Tests
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [Ubuntu]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+    runs-on: ${{ matrix.os }}-latest
+
+    steps:
+    - name: Checkout repository and submodules
+      uses: actions/checkout@v4
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install jax
+        pip install torch --index-url https://download.pytorch.org/whl/cpu
+        pip install -e .[array-api] --group test
+    - name: Test with pytest for Array API compatibility
       run: |
         python -m pytest
