@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Union
 
 import numpy as np
-from array_api_compat import array_namespace
+from array_api_compat import array_namespace, device as get_device
 from scipy.linalg import solve_triangular
 from scipy.optimize import root_scalar
 from scipy.special import polygamma, psi
@@ -141,6 +141,8 @@ def fit_student_t_em(
     xp = array_namespace(x)
     dtype = x.dtype
 
+    device = get_device(x)
+
     try:
         x = np.asarray(x)
     except Exception:
@@ -269,9 +271,9 @@ def fit_student_t_em(
         mu = mu.item()
         sigma = float(sigma)
 
-    mu = xp.asarray(mu, dtype=dtype)
-    sigma = xp.asarray(sigma, dtype=dtype)
-    nu = xp.asarray(nu, dtype=dtype)
+    mu = xp.asarray(mu, dtype=dtype, device=device)
+    sigma = xp.asarray(sigma, dtype=dtype, device=device)
+    nu = xp.asarray(nu, dtype=dtype, device=device)
 
     return mu, sigma, nu
 
