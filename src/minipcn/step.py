@@ -157,9 +157,7 @@ class TPCNStep(PCNStep):
         )  # Shape: (N,)
         k = 0.5 * (self.dims + self.nu)
         theta = 2 / (self.nu + xx)
-        print(theta.shape)
         z_inv = 1 / self.rng.gamma(shape=k, scale=theta)  # Shape: (N,)
-        print(k, z_inv.shape)
 
         # Propose new samples
         z = self.rng.normal(size=(n_samples, self.dims))
