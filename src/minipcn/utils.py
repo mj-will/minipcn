@@ -126,6 +126,34 @@ class ChainStateHistory:
         return fig
 
 
+def to_numpy_array(x: Array) -> np.ndarray:
+    """Convert an array-like object to a NumPy array.
+
+    Handles special cases for PyTorch and CuPy arrays.
+
+    Parameters
+    ----------
+    x : Array
+        Input array-like object.
+
+    Returns
+    -------
+    np.ndarray
+        Converted NumPy array.
+    """
+    try:
+        return np.asarray(x)
+    except Exception:
+        from array_api_compat import is_cupy_array, is_torch_array
+
+        if is_torch_array(x):
+            return np.asarray(x.detach().cpu())
+        elif is_cupy_array(x):
+            return np.asarray(x.get())
+        else:
+            raise
+
+
 def fit_student_t_em(
     x: Array,
     nu_init: float = 10.0,
@@ -161,11 +189,7 @@ def fit_student_t_em(
 
     device = get_device(x)
 
-    try:
-        x = np.asarray(x)
-    except Exception:
-        # Handle e.g. torch tensors that cannot be directly converted to Array
-        x = np.asarray(x.detach().cpu())
+    x = to_numpy_array(x)
 
     x = np.atleast_2d(x)
     if x.shape[0] == 1 and x.shape[1] > 1:
