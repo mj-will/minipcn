@@ -144,7 +144,8 @@ def to_numpy_array(x: Array) -> np.ndarray:
     try:
         return np.asarray(x)
     except Exception:
-        from array_api_compat import is_torch_array, is_cupy_array
+        from array_api_compat import is_cupy_array, is_torch_array
+
         if is_torch_array(x):
             return np.asarray(x.detach().cpu())
         elif is_cupy_array(x):
