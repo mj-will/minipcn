@@ -3,7 +3,7 @@ from typing import Any
 import numpy as np
 
 from ._typing import Array
-from .utils import ChainState
+from .utils import ChainState, _rng_gamma, _rng_normal
 
 
 class Step:
@@ -93,7 +93,7 @@ class PCNStep(Step):
         diff = x - self.mu  # (N, D)
 
         # Sample W_m ~ N(0, C)
-        z = self.rng.normal(size=(n_samples, self.dims))
+        z = _rng_normal(self.rng, size=(n_samples, self.dims), dtype=x.dtype)
         w = (self.chol_cov @ z.T).T  # (N, D)
 
         # Proposed new samples x'
@@ -149,6 +149,7 @@ class TPCNStep(PCNStep):
 
     def step(self, x):
         n_samples = x.shape[0]
+        dtype = x.dtype
         diff = x - self.mu  # Shape: (N, D)
 
         # Mahalanobis distances
@@ -157,10 +158,12 @@ class TPCNStep(PCNStep):
         )  # Shape: (N,)
         k = 0.5 * (self.dims + self.nu)
         theta = 2 / (self.nu + xx)
-        z_inv = 1 / self.rng.gamma(shape=k, scale=theta)  # Shape: (N,)
+        z_inv = 1 / _rng_gamma(
+            self.rng, shape=k, scale=theta, size=None, dtype=dtype
+        )  # Shape: (N,)
 
         # Propose new samples
-        z = self.rng.normal(size=(n_samples, self.dims))
+        z = _rng_normal(self.rng, size=(n_samples, self.dims), dtype=dtype)
         scaled_noise = (
             (self.xp.sqrt(z_inv)[:, None]) * (self.chol_cov @ z.T).T
         )  # Shape: (N, D)
