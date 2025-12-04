@@ -345,3 +345,19 @@ def fit_gaussian(x: Array) -> tuple[Array, Array]:
     mu = xp.mean(x, axis=0)
     cov = xp.cov(x.T)
     return mu, cov
+
+
+def _rng_normal(rng, size, dtype):
+    """Generate normal random numbers using the provided RNG."""
+    try:
+        return rng.normal(loc=0.0, scale=1.0, size=size, dtype=dtype)
+    except TypeError:
+        return rng.normal(loc=0.0, scale=1.0, size=size).astype(dtype)
+
+
+def _rng_gamma(rng, shape, scale, size, dtype):
+    """Generate gamma random numbers using the provided RNG."""
+    try:
+        return rng.gamma(shape=shape, scale=scale, size=size, dtype=dtype)
+    except TypeError:
+        return rng.gamma(shape=shape, scale=scale, size=size).astype(dtype)
