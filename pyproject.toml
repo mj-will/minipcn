@@ -25,6 +25,15 @@ dependencies = [
 
 dynamic = ["version"]
 
+[project.optional-dependencies]
+jax = [
+    "jax>0.4.35",
+    "jaxlib"
+]
+torch = [
+    "torch",
+]
+
 [dependency-groups]
 test = [
     "pytest>=7.0",
