@@ -73,6 +73,8 @@ chain, history = sampler.run(x0, n_steps=500, rng=rng)
 
 ```
 
+**Note:** the tpCN step falls back to numpy for fitting the Student-t distribution
+
 ## Functional API
 
 `minipcn` also supports explicit functional RNG state via
