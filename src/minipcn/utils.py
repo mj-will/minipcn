@@ -1,44 +1,40 @@
-import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Union
 
 import numpy as np
-
-try:
-    from array_api_compat import array_namespace
-    from array_api_compat import device as get_device
-except ImportError:
-    logging.warning(
-        "array_api_compat is not installed. Falling back to numpy for array namespace."
-    )
-
-    def array_namespace(x: Any) -> Any:
-        import numpy as np
-
-        return np
-
-    def get_device(x: Any) -> None:
-        return None
-
-
+from array_api_compat import array_namespace
+from array_api_compat import device as get_device
 from scipy.linalg import solve_triangular
 from scipy.optimize import root_scalar
 from scipy.special import polygamma, psi
 
 from ._typing import Array
 
+try:
+    from jax.tree_util import register_dataclass
+except ImportError:
 
+    def register_dataclass(*args, **kwargs):
+        def decorator(cls):
+            return cls
+
+        if args and callable(args[0]) and len(args) == 1 and not kwargs:
+            return args[0]
+        return decorator
+
+
+@register_dataclass
 @dataclass
 class ChainState:
     """State of the chain at a given iteration.
 
     Attributes
     ----------
-    it : int
-        Current iteration number.
-    acceptance_rate : float
+    it : Any
+        Current iteration number or backend scalar.
+    acceptance_rate : Any
         Acceptance rate of the current iteration.
-    target_acceptance_rate : float
+    target_acceptance_rate : Any
         Target acceptance rate for the chain.
     step : str
         Name of the step function used in this iteration.
@@ -46,31 +42,37 @@ class ChainState:
         Additional statistics collected during the iteration.
     """
 
-    it: int
-    acceptance_rate: float
-    target_acceptance_rate: float
-    step: str = ""
+    it: Any
+    acceptance_rate: Any
+    target_acceptance_rate: Any
+    step: str = field(default="", metadata={"static": True})
     extra_stats: Dict[str, Any] = field(default_factory=dict)
 
 
+@register_dataclass
 @dataclass
 class ChainStateHistory:
-    it: List[int]
-    acceptance_rate: List[float]
-    target_acceptance_rate: List[float]
-    step: str = ""
-    extra_stats: Dict[str, List[Any]] = field(default_factory=dict)
+    it: Any
+    acceptance_rate: Any
+    target_acceptance_rate: Any
+    step: str = field(default="", metadata={"static": True})
+    extra_stats: Dict[str, Any] = field(default_factory=dict)
 
     def __getitem__(self, index: Union[int, slice]) -> "ChainStateHistory":
         # Support slicing or single index
         if isinstance(index, int):
             return ChainStateHistory(
-                it=[self.it[index]],
-                acceptance_rate=[self.acceptance_rate[index]],
-                target_acceptance_rate=[self.target_acceptance_rate[index]],
+                it=_history_single_item(self.it, index),
+                acceptance_rate=_history_single_item(
+                    self.acceptance_rate, index
+                ),
+                target_acceptance_rate=_history_single_item(
+                    self.target_acceptance_rate, index
+                ),
                 step=self.step,
                 extra_stats={
-                    k: [v[index]] for k, v in self.extra_stats.items()
+                    k: _history_single_item(v, index)
+                    for k, v in self.extra_stats.items()
                 },
             )
         elif isinstance(index, slice):
@@ -86,16 +88,66 @@ class ChainStateHistory:
 
     @classmethod
     def from_chain_states(
-        cls, states: List[ChainState]
+        cls, states: List[ChainState], xp: Any | None = None
     ) -> "ChainStateHistory":
-        extra_stats = {}
-        for key in states[0].extra_stats.keys():
-            extra_stats[key] = [s.extra_stats[key] for s in states]
+        if not states:
+            return cls(
+                it=[],
+                acceptance_rate=[],
+                target_acceptance_rate=[],
+                extra_stats={},
+            )
+
+        step = states[0].step
+        extra_stats = {
+            key: [s.extra_stats[key] for s in states]
+            for key in states[0].extra_stats.keys()
+        }
+        history_data = {
+            "it": [s.it for s in states],
+            "acceptance_rate": [s.acceptance_rate for s in states],
+            "target_acceptance_rate": [
+                s.target_acceptance_rate for s in states
+            ],
+            "extra_stats": extra_stats,
+        }
+        if xp is not None and _contains_jax_tracer(history_data):
+            return cls(
+                it=_stack_history_values(history_data["it"], xp),
+                acceptance_rate=_stack_history_values(
+                    history_data["acceptance_rate"], xp
+                ),
+                target_acceptance_rate=_stack_history_values(
+                    history_data["target_acceptance_rate"], xp
+                ),
+                step=step,
+                extra_stats={
+                    key: _stack_history_values(values, xp)
+                    for key, values in extra_stats.items()
+                },
+            )
+
         return cls(
-            it=[s.it for s in states],
-            acceptance_rate=[s.acceptance_rate for s in states],
-            target_acceptance_rate=[s.target_acceptance_rate for s in states],
-            extra_stats=extra_stats,
+            it=[
+                int(to_numpy_array(value).reshape(-1)[0])
+                for value in history_data["it"]
+            ],
+            acceptance_rate=[
+                float(to_numpy_array(value).reshape(-1)[0])
+                for value in history_data["acceptance_rate"]
+            ],
+            target_acceptance_rate=[
+                float(to_numpy_array(value).reshape(-1)[0])
+                for value in history_data["target_acceptance_rate"]
+            ],
+            step=step,
+            extra_stats={
+                key: [
+                    float(to_numpy_array(value).reshape(-1)[0])
+                    for value in values
+                ]
+                for key, values in extra_stats.items()
+            },
         )
 
     def plot_acceptance_rate(self):
@@ -152,6 +204,40 @@ def to_numpy_array(x: Array) -> np.ndarray:
             return np.asarray(x.get())
         else:
             raise
+
+
+def _is_jax_tracer(value: Any) -> bool:
+    try:
+        import jax
+    except ImportError:
+        return False
+    return isinstance(value, jax.core.Tracer)
+
+
+def _contains_jax_tracer(value: Any) -> bool:
+    if _is_jax_tracer(value):
+        return True
+    if isinstance(value, dict):
+        return any(_contains_jax_tracer(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_contains_jax_tracer(v) for v in value)
+    return False
+
+
+def _stack_history_values(values: List[Any], xp: Any) -> Any:
+    return xp.stack([xp.asarray(value) for value in values], axis=0)
+
+
+def _history_single_item(value: Any, index: int) -> Any:
+    if isinstance(value, list):
+        return [value[index]]
+    return value[index : index + 1]
+
+
+def _to_scalar(value: Any) -> float:
+    if _is_jax_tracer(value):
+        return float("nan")
+    return float(to_numpy_array(value).reshape(-1)[0])
 
 
 def fit_student_t_em(
@@ -345,19 +431,3 @@ def fit_gaussian(x: Array) -> tuple[Array, Array]:
     mu = xp.mean(x, axis=0)
     cov = xp.cov(x.T)
     return mu, cov
-
-
-def _rng_normal(rng, size, dtype):
-    """Generate normal random numbers using the provided RNG."""
-    try:
-        return rng.normal(loc=0.0, scale=1.0, size=size, dtype=dtype)
-    except TypeError:
-        return rng.normal(loc=0.0, scale=1.0, size=size).astype(dtype)
-
-
-def _rng_gamma(rng, shape, scale, size, dtype):
-    """Generate gamma random numbers using the provided RNG."""
-    try:
-        return rng.gamma(shape=shape, scale=scale, size=size, dtype=dtype)
-    except TypeError:
-        return rng.gamma(shape=shape, scale=scale, size=size).astype(dtype)
