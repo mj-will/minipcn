@@ -40,11 +40,7 @@ For a complete example, see the `examples` directory.
 ## Array API support
 
 `minipcn` also supports different array API backends via `array-api-compat`
-and `orng` for random number generation. These can be installed by running
-
-```
-pip install minicpn[array-api]
-```
+and [`orng`](https://github.com/sequince-dev/orng) for random number generation.
 
 Usage is then similar to when using numpy, except one must use the RNG from
 `orng` and specify the backend via `xp`:
@@ -69,7 +65,7 @@ sampler = Sampler(
 x0 = rng.randn(size=(100, dims))
 
 # Run the sampler
-chain, history = sampler.run(x0, n_steps=500, rng=rng)
+chain, history = sampler.sample(x0, n_steps=500, rng=rng)
 
 ```
 
@@ -126,7 +122,8 @@ To use it under `jax.jit`, thread the state through the compiled function:
 
 ```python
 @jax.jit
-def run(x, state):
+def
+run(x, state):
     samples, history, next_state = sampler.sample_functional(
         x,
         n_steps=8,

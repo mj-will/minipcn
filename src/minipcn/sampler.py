@@ -25,10 +25,8 @@ class Sampler:
         Function to compute the log probability of the target distribution.
         It should take a single argument (the samples) and return the log
         probability.
-    step_fn : Step | str
-        Step object that defines the proposal distribution and the
-        transformation to the target distribution. If a string is provided,
-        it should be the name of a known step type (e.g., "pCN" or "tpCN").
+    step_fn : str
+        Name of the step type to use (e.g., "pCN" or "tpCN").
     rng : np.random.Generator | ArrayRNG
         Random number generator for reproducibility.
     dims : int
@@ -38,8 +36,7 @@ class Sampler:
     xp : Any, optional
         Array namespace to use (e.g., numpy, jax.numpy, torch). Default is numpy.
     **kwargs
-        Additional keyword arguments to pass to the step function if `step_fn`
-        is provided as a string.
+        Additional keyword arguments to pass to the step function.
     """
 
     def __init__(
@@ -109,7 +106,7 @@ class Sampler:
         x_init: Array,
         n_steps: int,
         *,
-        rng: RandomGenerator | np.random.Generator = None,
+        rng: RandomGenerator | np.random.Generator | None = None,
         seed: int | None = None,
         verbose: bool = True,
         return_last_only: bool = False,

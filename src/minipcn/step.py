@@ -72,8 +72,10 @@ class PCNStep(Step):
     ----------
     dims : int
         Number of dimensions of the target distribution.
-    rng : np.random.Generator
-        Random number generator.
+    xp : Any
+        The array library to use (e.g., numpy, jax.numpy).
+    rng_backend : orng.functional.FunctionalBackend
+        The random number generator backend to use.
     rho : float, optional
         pCN step size parameter, must be in the range (0, 1). Default is 0.5.
         See https://arxiv.org/abs/2407.07781 for details.
@@ -202,8 +204,10 @@ class TPCNStep(PCNStep):
     ----------
     dims : int
         Number of dimensions of the target distribution.
-    rng : np.random.Generator
-        Random number generator.
+    xp : Any
+        The array library to use (e.g., numpy, jax.numpy).
+    rng_backend : orng.functional.FunctionalBackend
+        The random number generator backend to use.
     rho : float, optional
         pCN step size parameter, must be in the range (0, 1). Default is 0.5.
         See https://arxiv.org/abs/2407.07781 for details.
