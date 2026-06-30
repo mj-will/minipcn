@@ -19,14 +19,19 @@ dependencies = [
     "numpy",
     "scipy",
     "tqdm",
+    "array-api-compat",
+    "orng>=0.1.0a7",
 ]
 
 dynamic = ["version"]
 
 [project.optional-dependencies]
-array-api = [
-    "array-api-compat",
-    "orng>=0.1.0a3",
+jax = [
+    "jax>0.4.35",
+    "jaxlib"
+]
+torch = [
+    "torch",
 ]
 
 [dependency-groups]

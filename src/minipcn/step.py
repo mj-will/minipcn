@@ -1,9 +1,23 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
 from typing import Any
 
-import numpy as np
+from orng.functional import FunctionalBackend
 
 from ._typing import Array
-from .utils import ChainState, _rng_gamma, _rng_normal
+from .utils import ChainState, register_dataclass
+
+
+@register_dataclass
+@dataclass
+class StepState:
+    mu: Any
+    cov: Any
+    inv_cov: Any
+    chol_cov: Any
+    rho: Any
+    nu: Any | None = None
 
 
 class Step:
@@ -12,31 +26,41 @@ class Step:
     Parameters
     ----------
     dims : int
-        Number of dimensions of the target distribution.
-    rng : np.random.Generator
-        Random number generator.
+        The dimensionality of the samples.
+    xp : Any
+        The array library to use (e.g., numpy, jax.numpy).
+    rng_backend : orng.functional.FunctionalBackend
+        The random number generator backend to use.
     """
 
-    def __init__(self, dims: int, rng: np.random.Generator, xp: Any):
+    def __init__(self, dims: int, xp: Any, rng_backend: FunctionalBackend):
         self.dims = dims
-        self.rng = rng
         self.xp = xp
+        self.rng_backend = rng_backend
 
-    def initialise(self, x: Array):
-        pass
-
-    def update(self, state: ChainState, samples: Array):
-        pass
-
-    def update_state(self, state: ChainState) -> ChainState:
-        state.step = self.__class__.__name__
-        return state
-
-    def step(self, x: Array) -> tuple[Array, Array]:
+    def init_state(self, x: Array) -> StepState:
         raise NotImplementedError("Subclasses should implement this method.")
 
-    def __call__(self, *args, **kwargs):
-        return self.step(*args, **kwargs)
+    def propose(
+        self,
+        state: StepState,
+        rng_state: Any,
+        x: Array,
+    ) -> tuple[Any, Array, Array]:
+        raise NotImplementedError("Subclasses should implement this method.")
+
+    def adapt(
+        self,
+        state: StepState,
+        chain_state: ChainState,
+        *,
+        samples: Array,
+    ) -> tuple[StepState, ChainState]:
+        return state, chain_state
+
+    @property
+    def step_name(self) -> str:
+        return self.__class__.__name__
 
 
 class PCNStep(Step):
@@ -48,75 +72,126 @@ class PCNStep(Step):
     ----------
     dims : int
         Number of dimensions of the target distribution.
-    rng : np.random.Generator
-        Random number generator.
+    xp : Any
+        The array library to use (e.g., numpy, jax.numpy).
+    rng_backend : orng.functional.FunctionalBackend
+        The random number generator backend to use.
     rho : float, optional
         pCN step size parameter, must be in the range (0, 1). Default is 0.5.
         See https://arxiv.org/abs/2407.07781 for details.
+    adaptive : bool, optional
+        Whether to adapt the rho parameter during sampling. Default is True.
     """
 
-    def __init__(self, dims, rng, xp, rho: float = 0.5):
-        super().__init__(dims, rng, xp)
-
+    def __init__(
+        self,
+        dims: int,
+        xp: Any,
+        rng_backend: Any,
+        rho: float = 0.5,
+        adaptive: bool = True,
+    ):
+        super().__init__(dims, xp, rng_backend)
         if not (0 < rho < 1):
             raise ValueError("rho must be in the range (0, 1).")
         self.rho = rho
+        self.adaptive = adaptive
 
-    def initialise(self, x):
+    def init_state(self, x: Array) -> StepState:
         from .utils import fit_gaussian
 
-        self.mu, self.cov = fit_gaussian(x)
+        mu, cov = fit_gaussian(x)
         if self.dims == 1:
-            self.inv_cov = self.xp.atleast_2d(1.0 / self.cov)
-            self.chol_cov = self.xp.atleast_2d(self.xp.sqrt(self.cov))
+            inv_cov = self.xp.atleast_2d(1.0 / cov)
+            chol_cov = self.xp.atleast_2d(self.xp.sqrt(cov))
         else:
-            self.inv_cov = self.xp.linalg.inv(self.cov)
-            self.chol_cov = self.xp.linalg.cholesky(self.cov)
+            inv_cov = self.xp.linalg.inv(cov)
+            chol_cov = self.xp.linalg.cholesky(cov)
+        rho = self.xp.asarray(self.rho, dtype=x.dtype)
+        return StepState(
+            mu=mu,
+            cov=cov,
+            inv_cov=inv_cov,
+            chol_cov=chol_cov,
+            rho=rho,
+        )
 
-    def update(self, state, samples):
-        delta = state.acceptance_rate - state.target_acceptance_rate
-        step_size = 1 / (state.it + 1) ** 0.75
-        self.rho = np.abs(
-            np.minimum(
-                self.rho + step_size * delta,
-                np.minimum(2.38 / self.dims**0.5, 0.99),
+    def propose(
+        self,
+        state: StepState,
+        rng_state: Any,
+        x: Array,
+    ) -> tuple[Any, Array, Array]:
+        n_samples = x.shape[0]
+        diff = x - state.mu
+
+        z, rng_state = self.rng_backend.normal(
+            rng_state,
+            loc=0.0,
+            scale=1.0,
+            size=(n_samples, self.dims),
+            dtype=x.dtype,
+        )
+        w = (state.chol_cov @ z.T).T
+        rho = state.rho
+        x_prime = (
+            state.mu
+            + self.xp.sqrt(self.xp.asarray(1.0, dtype=x.dtype) - rho**2) * diff
+            + rho * w
+        )
+
+        diff_prime = x_prime - state.mu
+        m_x = self.xp.einsum("ni,ij,nj->n", diff, state.inv_cov, diff)
+        m_xp = self.xp.einsum(
+            "ni,ij,nj->n", diff_prime, state.inv_cov, diff_prime
+        )
+        log_alpha = -0.5 * (m_x - m_xp)
+        return rng_state, x_prime, log_alpha
+
+    def adapt(
+        self,
+        state: StepState,
+        chain_state: ChainState,
+        *,
+        samples: Array,
+    ) -> tuple[StepState, ChainState]:
+        del samples
+        if not self.adaptive:
+            return state, chain_state
+        dtype = state.rho.dtype
+        step_size = self.xp.asarray(chain_state.it + 1, dtype=dtype) ** (-0.75)
+        rho_next = self.xp.abs(
+            self.xp.minimum(
+                state.rho
+                + step_size
+                * (
+                    chain_state.acceptance_rate
+                    - self.xp.asarray(
+                        chain_state.target_acceptance_rate, dtype=dtype
+                    )
+                ),
+                self.xp.minimum(
+                    self.xp.asarray(2.38 / self.dims**0.5, dtype=dtype),
+                    self.xp.asarray(0.99, dtype=dtype),
+                ),
             )
         )
-
-    def update_state(self, state):
-        state = super().update_state(state)
-        state.extra_stats["rho"] = self.rho
-        return state
-
-    def step(self, x):
-        n_samples = x.shape[0]
-        diff = x - self.mu  # (N, D)
-
-        # Sample W_m ~ N(0, C)
-        z = _rng_normal(self.rng, size=(n_samples, self.dims), dtype=x.dtype)
-        w = (self.chol_cov @ z.T).T  # (N, D)
-
-        # Proposed new samples x'
-        x_prime = (
-            self.mu
-            + self.xp.sqrt(self.xp.asarray(1 - self.rho**2)) * diff
-            + self.rho * w
+        next_state = StepState(
+            mu=state.mu,
+            cov=state.cov,
+            inv_cov=state.inv_cov,
+            chol_cov=state.chol_cov,
+            rho=rho_next,
+            nu=state.nu,
         )
-
-        # Evaluate the log proposal density:
-        # Since C is constant, we can ignore normalizing terms for computing alpha.
-
-        diff_prime = x_prime - self.mu
-
-        # Mahalanobis distances
-        m_x = self.xp.einsum("ni,ij,nj->n", diff, self.inv_cov, diff)
-        m_xp = self.xp.einsum(
-            "ni,ij,nj->n", diff_prime, self.inv_cov, diff_prime
+        next_chain_state = ChainState(
+            it=chain_state.it,
+            acceptance_rate=chain_state.acceptance_rate,
+            target_acceptance_rate=chain_state.target_acceptance_rate,
+            step=chain_state.step,
+            extra_stats={**chain_state.extra_stats, "rho": rho_next},
         )
-
-        log_alpha = -0.5 * (m_x - m_xp)
-
-        return x_prime, log_alpha
+        return next_state, next_chain_state
 
 
 class TPCNStep(PCNStep):
@@ -129,85 +204,118 @@ class TPCNStep(PCNStep):
     ----------
     dims : int
         Number of dimensions of the target distribution.
-    rng : np.random.Generator
-        Random number generator.
+    xp : Any
+        The array library to use (e.g., numpy, jax.numpy).
+    rng_backend : orng.functional.FunctionalBackend
+        The random number generator backend to use.
     rho : float, optional
         pCN step size parameter, must be in the range (0, 1). Default is 0.5.
         See https://arxiv.org/abs/2407.07781 for details.
+    adaptive : bool, optional
+        Whether to adapt the rho parameter during sampling. Default is True.
     """
 
-    def initialise(self, x):
+    def init_state(self, x: Array) -> StepState:
         from .utils import fit_student_t_em
 
-        self.mu, self.cov, self.nu = fit_student_t_em(x)
+        mu, cov, nu = fit_student_t_em(x)
         if self.dims == 1:
-            self.inv_cov = self.xp.atleast_2d(1.0 / self.cov)
-            self.chol_cov = self.xp.atleast_2d(self.xp.sqrt(self.cov))
+            inv_cov = self.xp.atleast_2d(1.0 / cov)
+            chol_cov = self.xp.atleast_2d(self.xp.sqrt(cov))
         else:
-            self.inv_cov = self.xp.linalg.inv(self.cov)
-            self.chol_cov = self.xp.linalg.cholesky(self.cov)
+            inv_cov = self.xp.linalg.inv(cov)
+            chol_cov = self.xp.linalg.cholesky(cov)
+        rho = self.xp.asarray(self.rho, dtype=x.dtype)
+        return StepState(
+            mu=mu,
+            cov=cov,
+            inv_cov=inv_cov,
+            chol_cov=chol_cov,
+            rho=rho,
+            nu=nu,
+        )
 
-    def step(self, x):
+    def propose(
+        self,
+        state: StepState,
+        rng_state: Any,
+        x: Array,
+    ) -> tuple[Any, Array, Array]:
         n_samples = x.shape[0]
         dtype = x.dtype
-        diff = x - self.mu  # Shape: (N, D)
+        diff = x - state.mu
+        xx = self.xp.einsum("ni,ij,nj->n", diff, state.inv_cov, diff)
+        k = 0.5 * (self.dims + state.nu)
+        theta = 2 / (state.nu + xx)
 
-        # Mahalanobis distances
-        xx = self.xp.einsum(
-            "ni,ij,nj->n", diff, self.inv_cov, diff
-        )  # Shape: (N,)
-        k = 0.5 * (self.dims + self.nu)
-        theta = 2 / (self.nu + xx)
-        z_inv = 1 / _rng_gamma(
-            self.rng, shape=k, scale=theta, size=None, dtype=dtype
-        )  # Shape: (N,)
+        gamma_draw, rng_state = self.rng_backend.gamma(
+            rng_state,
+            shape=k,
+            scale=theta,
+            size=None,
+            dtype=dtype,
+        )
+        z_inv = 1 / gamma_draw
 
-        # Propose new samples
-        z = _rng_normal(self.rng, size=(n_samples, self.dims), dtype=dtype)
-        scaled_noise = (
-            (self.xp.sqrt(z_inv)[:, None]) * (self.chol_cov @ z.T).T
-        )  # Shape: (N, D)
+        z, rng_state = self.rng_backend.normal(
+            rng_state,
+            loc=0.0,
+            scale=1.0,
+            size=(n_samples, self.dims),
+            dtype=dtype,
+        )
+        scaled_noise = self.xp.sqrt(z_inv)[:, None] * (state.chol_cov @ z.T).T
+        rho = state.rho
         x_prime = (
-            self.mu
-            + self.xp.sqrt(self.xp.asarray(1 - self.rho**2)) * diff
-            + self.rho * scaled_noise
-        )  # Shape: (N, D)
+            state.mu
+            + self.xp.sqrt(self.xp.asarray(1.0, dtype=dtype) - rho**2) * diff
+            + rho * scaled_noise
+        )
 
-        diff_prime = x_prime - self.mu
+        diff_prime = x_prime - state.mu
         xx_prime = self.xp.einsum(
-            "ni,ij,nj->n", diff_prime, self.inv_cov, diff_prime
+            "ni,ij,nj->n", diff_prime, state.inv_cov, diff_prime
         )
 
-        log_a_num = (-0.5 * (self.nu + self.dims)) * self.xp.log1p(
-            xx / self.nu
+        log_a_num = (-0.5 * (state.nu + self.dims)) * self.xp.log1p(
+            xx / state.nu
         )
-        log_a_denom = (-0.5 * (self.nu + self.dims)) * self.xp.log1p(
-            xx_prime / self.nu
+        log_a_denom = (-0.5 * (state.nu + self.dims)) * self.xp.log1p(
+            xx_prime / state.nu
         )
         log_alpha = log_a_num - log_a_denom
-        return x_prime, log_alpha
+        return rng_state, x_prime, log_alpha
 
 
 def step_factory(
-    step_name: str, dims: int, rng: np.random.Generator, xp, **kwargs
-):
-    """
-    Factory function to create a step instance based on the step name.
+    step_name: str,
+    dims: int,
+    xp: Any,
+    rng_backend: Any,
+    **kwargs: Any,
+) -> Step:
+    """Factory function to create a Step instance based on the step name.
 
     Parameters
     ----------
     step_name : {"pCN", "tPCN"}
-        Name of the step type.
+        The name of the step type (e.g., "pcn", "tpcn").
     dims : int
-        Number of dimensions of the target distribution.
-    rng : np.random.Generator
-        Random number generator.
-    **kwargs : dict
+        The dimensionality of the samples.
+    xp : Any
+        The array library to use (e.g., numpy, jax.numpy).
+    rng_backend : Any
+        The random number generator backend to use (e.g., numpy.random, jax.random).
+    **kwargs : Any
         Additional keyword arguments to pass to the step constructor.
     """
     if step_name.lower() == "pcn":
-        return PCNStep(dims=dims, rng=rng, xp=xp, **kwargs)
-    elif step_name.lower() == "tpcn":
-        return TPCNStep(dims=dims, rng=rng, xp=xp, **kwargs)
-    else:
-        raise ValueError(f"Unknown step type: {step_name}")
+        return PCNStep(dims=dims, xp=xp, rng_backend=rng_backend, **kwargs)
+    if step_name.lower() == "tpcn":
+        return TPCNStep(
+            dims=dims,
+            xp=xp,
+            rng_backend=rng_backend,
+            **kwargs,
+        )
+    raise ValueError(f"Unknown step type: {step_name}")

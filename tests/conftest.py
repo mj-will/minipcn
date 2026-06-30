@@ -1,5 +1,5 @@
-import numpy as np
 import pytest
+from orng import RandomGenerator
 
 
 @pytest.fixture(params=["numpy", "jax", "torch"])
@@ -11,12 +11,7 @@ def backend(request):
 @pytest.fixture
 def rng(backend):
     """Fixture to provide a random number generator."""
-    try:
-        from orng import ArrayRNG
-
-        return ArrayRNG(backend=backend, seed=42)
-    except ImportError:
-        return np.random.default_rng(seed=42)
+    return RandomGenerator(backend=backend, seed=42)
 
 
 @pytest.fixture(params=[1, 4])
