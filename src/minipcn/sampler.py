@@ -4,6 +4,7 @@ from typing import Any, Callable
 from warnings import warn
 
 import numpy as np
+from array_api_compat import is_jax_namespace
 from orng import RandomGenerator
 from orng.functional import (
     create_functional_backend,
@@ -13,7 +14,7 @@ from tqdm import trange
 
 from ._typing import Array
 from .step import Step
-from .utils import ChainState, ChainStateHistory, _is_jax_tracer, _to_scalar
+from .utils import ChainState, ChainStateHistory, _to_scalar
 
 
 class Sampler:
@@ -27,7 +28,7 @@ class Sampler:
         probability.
     step_fn : str
         Name of the step type to use (e.g., "pCN" or "tpCN").
-    rng : np.random.Generator | ArrayRNG
+    rng : np.random.Generator | RandomGenerator
         Random number generator for reproducibility.
     dims : int
         Number of dimensions of the target distribution.
@@ -148,7 +149,12 @@ class Sampler:
             return_last_only=return_last_only,
         )
 
-        if hasattr(rng, "_impl") and not _is_jax_tracer(next_rng_state):
+        is_tracer = False
+        if is_jax_namespace(self.xp):
+            from ._jax import _is_tracer
+
+            is_tracer = _is_tracer(next_rng_state)
+        if hasattr(rng, "_impl") and not is_tracer:
             rng._impl._state = next_rng_state
 
         return chain, history

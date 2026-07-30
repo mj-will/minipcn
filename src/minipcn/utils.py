@@ -2,16 +2,13 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Union
 
 import numpy as np
-from array_api_compat import array_namespace
-from array_api_compat import device as get_device
-from scipy.linalg import solve_triangular
-from scipy.optimize import root_scalar
-from scipy.special import polygamma, psi
+from array_api_compat import array_namespace, is_jax_namespace
 
 from ._typing import Array
+from .student_t import fit_student_t_em as fit_student_t_em
 
 try:
-    from jax.tree_util import register_dataclass
+    from ._jax import _register_dataclass as register_dataclass
 except ImportError:
 
     def register_dataclass(*args, **kwargs):
@@ -111,21 +108,24 @@ class ChainStateHistory:
             ],
             "extra_stats": extra_stats,
         }
-        if xp is not None and _contains_jax_tracer(history_data):
-            return cls(
-                it=_stack_history_values(history_data["it"], xp),
-                acceptance_rate=_stack_history_values(
-                    history_data["acceptance_rate"], xp
-                ),
-                target_acceptance_rate=_stack_history_values(
-                    history_data["target_acceptance_rate"], xp
-                ),
-                step=step,
-                extra_stats={
-                    key: _stack_history_values(values, xp)
-                    for key, values in extra_stats.items()
-                },
-            )
+        if xp is not None and is_jax_namespace(xp):
+            from ._jax import _contains_tracer, _stack_history_values
+
+            if _contains_tracer(history_data):
+                return cls(
+                    it=_stack_history_values(history_data["it"], xp),
+                    acceptance_rate=_stack_history_values(
+                        history_data["acceptance_rate"], xp
+                    ),
+                    target_acceptance_rate=_stack_history_values(
+                        history_data["target_acceptance_rate"], xp
+                    ),
+                    step=step,
+                    extra_stats={
+                        key: _stack_history_values(values, xp)
+                        for key, values in extra_stats.items()
+                    },
+                )
 
         return cls(
             it=[
@@ -206,28 +206,6 @@ def to_numpy_array(x: Array) -> np.ndarray:
             raise
 
 
-def _is_jax_tracer(value: Any) -> bool:
-    try:
-        import jax
-    except ImportError:
-        return False
-    return isinstance(value, jax.core.Tracer)
-
-
-def _contains_jax_tracer(value: Any) -> bool:
-    if _is_jax_tracer(value):
-        return True
-    if isinstance(value, dict):
-        return any(_contains_jax_tracer(v) for v in value.values())
-    if isinstance(value, (list, tuple)):
-        return any(_contains_jax_tracer(v) for v in value)
-    return False
-
-
-def _stack_history_values(values: List[Any], xp: Any) -> Any:
-    return xp.stack([xp.asarray(value) for value in values], axis=0)
-
-
 def _history_single_item(value: Any, index: int) -> Any:
     if isinstance(value, list):
         return [value[index]]
@@ -235,180 +213,14 @@ def _history_single_item(value: Any, index: int) -> Any:
 
 
 def _to_scalar(value: Any) -> float:
-    if _is_jax_tracer(value):
-        return float("nan")
-    return float(to_numpy_array(value).reshape(-1)[0])
+    try:
+        return float(to_numpy_array(value).reshape(-1)[0])
+    except Exception:
+        from ._jax import _is_tracer
 
-
-def fit_student_t_em(
-    x: Array,
-    nu_init: float = 10.0,
-    tol: float = 1e-5,
-    max_iter: int = 1000,
-) -> tuple[Array, Array, Array]:
-    """Fit a multivariate Student's t-distribution using EM algorithm.
-
-    Parameters
-    ----------
-    x : Array
-        Samples of shape (n_samples, n_dims).
-    nu_init : float, optional
-        Initial degrees of freedom for the Student's t-distribution. Default is 10.0.
-    tol : float, optional
-        Tolerance for convergence of the degrees of freedom. Default is 1e-5.
-    max_iter : int, optional
-        Maximum number of iterations for the EM algorithm. Default is 1000.
-
-    Returns
-    -------
-    mu : Array
-        Mean of the fitted Student's t-distribution, shape (n_dims,).
-    sigma : Array
-        Covariance matrix of the fitted Student's t-distribution, shape (n_dims, n_dims).
-    nu : float
-        Estimated degrees of freedom of the Student's t-distribution.
-    """
-    # Ensure x is 2D
-
-    xp = array_namespace(x)
-    dtype = x.dtype
-
-    device = get_device(x)
-
-    x = to_numpy_array(x)
-
-    x = np.atleast_2d(x)
-    if x.shape[0] == 1 and x.shape[1] > 1:
-        x = x.T
-    n_samples, dims = x.shape
-
-    mu = x.mean(axis=0)
-    sigma = np.cov(x.T) if dims > 1 else float(np.var(x, ddof=1))
-    nu = nu_init
-
-    min_variance = 1e-9
-
-    def ensure_positive_definite(matrix):
-        if dims == 1:
-            # Guarantee strictly positive variance to avoid divide-by-zero.
-            adjusted = float(max(matrix, min_variance))
-            return adjusted, None
-
-        adjusted = np.array(matrix, copy=True)
-        eye = np.eye(dims)
-        scale = np.mean(np.diag(adjusted))
-        if scale <= 0:
-            scale = 1.0
-        jitter = 0.0
-        for _ in range(8):
-            try:
-                chol = np.linalg.cholesky(adjusted)
-                return adjusted, chol
-            except np.linalg.LinAlgError:
-                jitter = max(
-                    min_variance, (1e-9 if jitter == 0.0 else jitter * 10.0)
-                )
-                adjusted = adjusted + eye * (jitter * scale)
-        raise np.linalg.LinAlgError(
-            "Matrix is not positive definite even after jitter"
-        )
-
-    def mahalanobis_squared(diff_mat, chol):
-        solved = solve_triangular(
-            chol,
-            diff_mat.T,
-            lower=True,
-            check_finite=False,
-        ).T
-        return np.sum(solved**2, axis=1)
-
-    for _ in range(max_iter):
-        diff = x - mu
-        if dims == 1:
-            sigma, _ = ensure_positive_definite(sigma)
-            delta = (diff[:, 0] ** 2) / sigma
-        else:
-            sigma, chol = ensure_positive_definite(sigma)
-            delta = mahalanobis_squared(diff, chol)
-
-        w = (nu + dims) / (nu + delta)
-        w_sum = np.sum(w)
-        mu_new = (w[:, None] * x).sum(axis=0) / w_sum
-
-        diff_new = x - mu_new
-        if dims == 1:
-            sigma_new = float(np.dot(w, diff_new[:, 0] ** 2) / w_sum)
-            sigma_new, _ = ensure_positive_definite(sigma_new)
-            delta_new = (diff_new[:, 0] ** 2) / sigma_new
-        else:
-            sigma_new = (diff_new.T * w) @ diff_new / w_sum
-            sigma_new = 0.5 * (sigma_new + sigma_new.T)
-            sigma_new, chol_new = ensure_positive_definite(sigma_new)
-            delta_new = mahalanobis_squared(diff_new, chol_new)
-
-        w_i_nu = (nu + dims) / (nu + delta_new)
-        avg_log_w_minus_w = np.mean(np.log(w_i_nu) - w_i_nu)
-
-        def nu_equation(nu_val):
-            return (
-                -psi(nu_val / 2.0)
-                + np.log(nu_val / 2.0)
-                + 1.0
-                + avg_log_w_minus_w
-                + psi((nu_val + dims) / 2.0)
-                - np.log((nu_val + dims) / 2.0)
-            )
-
-        def nu_equation_prime(nu_val):
-            return (
-                -0.5 * polygamma(1, nu_val / 2.0)
-                + 1.0 / nu_val
-                + 0.5 * polygamma(1, (nu_val + dims) / 2.0)
-                - 1.0 / (nu_val + dims)
-            )
-
-        nu_new = nu
-        try:
-            root_res = root_scalar(
-                nu_equation,
-                fprime=nu_equation_prime,
-                x0=nu,
-                method="newton",
-            )
-            if root_res.converged and root_res.root > 0:
-                nu_new = root_res.root
-        except (ValueError, RuntimeError):
-            # Fall back to the previous value if Newton iteration fails.
-            pass
-
-        mu_diff = float(np.max(np.abs(mu_new - mu)))
-        sigma_diff = (
-            abs(sigma_new - sigma)
-            if dims == 1
-            else float(np.max(np.abs(sigma_new - sigma)))
-        )
-
-        if max(mu_diff, sigma_diff, abs(nu_new - nu)) < tol:
-            mu, sigma, nu = mu_new, sigma_new, nu_new
-            break
-
-        mu, sigma, nu = mu_new, sigma_new, nu_new
-
-    # Return scalar for 1D
-    if dims == 1:
-        mu = mu.item()
-        sigma = float(sigma)
-
-    if device is not None:
-        mu = xp.asarray(mu, dtype=dtype, device=device)
-        sigma = xp.asarray(sigma, dtype=dtype, device=device)
-        nu = xp.asarray(nu, dtype=dtype, device=device)
-    else:
-        mu = xp.asarray(mu, dtype=dtype)
-        sigma = xp.asarray(sigma, dtype=dtype)
-        nu = xp.asarray(nu, dtype=dtype)
-
-    return mu, sigma, nu
+        if _is_tracer(value):
+            return float("nan")
+        raise
 
 
 def fit_gaussian(x: Array) -> tuple[Array, Array]:
