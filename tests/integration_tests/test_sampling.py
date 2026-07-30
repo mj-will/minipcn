@@ -19,7 +19,8 @@ def test_sampling(rng, log_target_fn, step_fn, dims, xp):
     assert history.it[-1] == 99
 
 
-def test_sampling_jax_jit_pcn_return_last_only():
+@pytest.mark.parametrize("step_fn", ["pCN", "tpCN"])
+def test_sampling_jax_jit_return_last_only(step_fn):
     jax = pytest.importorskip("jax")
     jnp = pytest.importorskip("jax.numpy")
     from orng.functional import create_functional_backend
@@ -41,7 +42,7 @@ def test_sampling_jax_jit_pcn_return_last_only():
     sampler = Sampler(
         log_prob_fn=log_target_fn,
         dims=dims,
-        step_fn="pCN",
+        step_fn=step_fn,
         target_acceptance_rate=0.234,
         xp=jnp,
     )
