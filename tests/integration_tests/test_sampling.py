@@ -1,26 +1,10 @@
+import numpy as np
 import pytest
 
 from minipcn import Sampler
 
 
-def test_sampling(rng, log_target_fn, step_fn, dims, xp):
-    x_init = rng.normal(size=(100, dims))  # Initial samples
-
-    sampler = Sampler(
-        log_prob_fn=log_target_fn,
-        dims=dims,
-        step_fn=step_fn,
-        target_acceptance_rate=0.234,
-        xp=xp,
-    )
-
-    chain, history = sampler.sample(x_init, n_steps=100, rng=rng)
-    assert chain.shape == (101, 100, dims)
-    assert history.it[-1] == 99
-
-
-@pytest.mark.parametrize("step_fn", ["pCN", "tpCN"])
-def test_sampling_jax_jit_return_last_only(step_fn):
+def _make_jax_sampler(step_fn):
     jax = pytest.importorskip("jax")
     jnp = pytest.importorskip("jax.numpy")
     from orng.functional import create_functional_backend
@@ -46,8 +30,29 @@ def test_sampling_jax_jit_return_last_only(step_fn):
         target_acceptance_rate=0.234,
         xp=jnp,
     )
+    return jax, jnp, sampler, x_init, rng_state
 
-    @jax.jit
+
+def test_sampling(rng, log_target_fn, step_fn, dims, xp):
+    x_init = rng.normal(size=(100, dims))  # Initial samples
+
+    sampler = Sampler(
+        log_prob_fn=log_target_fn,
+        dims=dims,
+        step_fn=step_fn,
+        target_acceptance_rate=0.234,
+        xp=xp,
+    )
+
+    chain, history = sampler.sample(x_init, n_steps=100, rng=rng)
+    assert chain.shape == (101, 100, dims)
+    assert history.it[-1] == 99
+
+
+@pytest.mark.parametrize("step_fn", ["pCN", "tpCN"])
+def test_sampling_jax_jit_return_last_only(step_fn):
+    jax, _, sampler, x_init, rng_state = _make_jax_sampler(step_fn)
+
     def run(x0, state):
         samples, history, _ = sampler.sample_functional(
             x0,
@@ -58,16 +63,103 @@ def test_sampling_jax_jit_return_last_only(step_fn):
         )
         return samples, history
 
-    final_samples, history = run(x_init, rng_state)
+    jaxpr = jax.make_jaxpr(run)(x_init, rng_state)
+    assert "scan" in {equation.primitive.name for equation in jaxpr.jaxpr.eqns}
+
+    final_samples, history = jax.jit(run)(x_init, rng_state)
     assert final_samples.shape == x_init.shape
     assert final_samples.dtype == x_init.dtype
     assert history.it.shape == (8,)
     assert history.acceptance_rate.shape == (8,)
 
 
+def test_sampling_jax_jit_scan_can_be_disabled():
+    jax, _, sampler, x_init, rng_state = _make_jax_sampler("pCN")
+
+    def run(x0, state):
+        return sampler.sample_functional(
+            x0,
+            n_steps=8,
+            rng_state=state,
+            verbose=False,
+            return_last_only=True,
+            use_scan=False,
+        )
+
+    jaxpr = jax.make_jaxpr(run)(x_init, rng_state)
+    assert "scan" not in {
+        equation.primitive.name for equation in jaxpr.jaxpr.eqns
+    }
+
+    final_samples, history, _ = jax.jit(run)(x_init, rng_state)
+    assert final_samples.shape == x_init.shape
+    assert history.it.shape == (8,)
+
+
+@pytest.mark.parametrize("step_fn", ["pCN", "tpCN"])
+def test_sampling_jax_scan_matches_loop(step_fn):
+    jax, _, sampler, x_init, rng_state = _make_jax_sampler(step_fn)
+
+    scan_chain, scan_history, scan_rng_state = sampler.sample_functional(
+        x_init,
+        n_steps=8,
+        rng_state=rng_state,
+        verbose=False,
+        use_scan=True,
+    )
+    loop_chain, loop_history, loop_rng_state = sampler.sample_functional(
+        x_init,
+        n_steps=8,
+        rng_state=rng_state,
+        verbose=False,
+        use_scan=False,
+    )
+
+    np.testing.assert_allclose(scan_chain, loop_chain, rtol=1e-5, atol=1e-6)
+    np.testing.assert_array_equal(scan_history.it, loop_history.it)
+    np.testing.assert_allclose(
+        scan_history.acceptance_rate,
+        loop_history.acceptance_rate,
+        rtol=1e-5,
+        atol=1e-6,
+    )
+    np.testing.assert_allclose(
+        scan_history.target_acceptance_rate,
+        loop_history.target_acceptance_rate,
+        rtol=1e-5,
+        atol=1e-6,
+    )
+    assert scan_history.step == loop_history.step
+    assert scan_history.extra_stats.keys() == loop_history.extra_stats.keys()
+    for key in scan_history.extra_stats:
+        np.testing.assert_allclose(
+            scan_history.extra_stats[key],
+            loop_history.extra_stats[key],
+            rtol=1e-5,
+            atol=1e-6,
+        )
+    np.testing.assert_array_equal(
+        jax.random.key_data(scan_rng_state),
+        jax.random.key_data(loop_rng_state),
+    )
+
+
+def test_forced_scan_rejects_verbose_output():
+    _, _, sampler, x_init, rng_state = _make_jax_sampler("pCN")
+
+    with pytest.raises(
+        ValueError, match="use_scan=True requires verbose=False"
+    ):
+        sampler.sample_functional(
+            x_init,
+            n_steps=8,
+            rng_state=rng_state,
+            use_scan=True,
+        )
+
+
 def test_sampling_with_functional_backend_input():
     pytest.importorskip("numpy")
-    import numpy as np
     from orng.functional import create_functional_backend
 
     dims = 2
