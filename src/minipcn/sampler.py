@@ -419,7 +419,6 @@ class Sampler:
         )
         next_carry = rng_state, x, log_prob_x, step_state
         output = {
-            "particles": x,
             "acceptance_rate": chain_state.acceptance_rate,
             "target_acceptance_rate": chain_state.target_acceptance_rate,
             "extra_stats": chain_state.extra_stats,
@@ -440,13 +439,16 @@ class Sampler:
         """Run sampling with backend-appropriate scan control flow."""
 
         def body(carry, iteration):
-            return self._sample_step(
+            next_carry, output = self._sample_step(
                 carry,
                 iteration,
                 rng_backend=rng_backend,
                 step_fn=step_fn,
                 target_acceptance_rate=target_acceptance_rate,
             )
+            if not return_last_only:
+                output = {"particles": next_carry[1], **output}
+            return next_carry, output
 
         iterations = self.xp.arange(n_steps)
         final_carry, outputs = scan(
