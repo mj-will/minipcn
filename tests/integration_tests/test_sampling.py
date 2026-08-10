@@ -64,7 +64,15 @@ def test_sampling_jax_jit_return_last_only(step_fn):
         return samples, history
 
     jaxpr = jax.make_jaxpr(run)(x_init, rng_state)
-    assert "scan" in {equation.primitive.name for equation in jaxpr.jaxpr.eqns}
+    scan_equation = next(
+        equation
+        for equation in jaxpr.jaxpr.eqns
+        if equation.primitive.name == "scan"
+    )
+    particle_history_shape = (8, *x_init.shape)
+    assert particle_history_shape not in {
+        variable.aval.shape for variable in scan_equation.outvars
+    }
 
     final_samples, history = jax.jit(run)(x_init, rng_state)
     assert final_samples.shape == x_init.shape
