@@ -21,7 +21,7 @@ dependencies = [
     "tqdm",
     "array-api-compat",
     "orng>=0.1.0a7",
-    "acai>=0.1.0a1",
+    "acai-control>=0.1.0a1",
 ]
 
 dynamic = ["version"]
