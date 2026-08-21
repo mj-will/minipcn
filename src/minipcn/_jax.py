@@ -6,7 +6,12 @@ import jax.scipy.special as jsp
 from array_api_compat import device as get_device
 
 from ._typing import Array
-from .student_t import _nu_value, _prepare_samples
+from .student_t import (
+    _NU_SOLVER_MAX_ITER,
+    _NU_SOLVER_TOL,
+    _nu_value,
+    _prepare_samples,
+)
 
 
 def _is_tracer(value: Any) -> bool:
@@ -49,6 +54,10 @@ def fit_student_t_em(
     dims_value = jnp.asarray(dims, **asarray_kwargs)
     one = jnp.asarray(1, **asarray_kwargs)
     tol_value = jnp.asarray(tol, **asarray_kwargs)
+    root_tol_value = jnp.maximum(
+        jnp.asarray(_NU_SOLVER_TOL, **asarray_kwargs),
+        jnp.asarray(jnp.finfo(dtype).eps, **asarray_kwargs),
+    )
     eye = jnp.eye(dims, **asarray_kwargs)
     ridge_factor = jnp.asarray(
         max(1e-9, 10 * jnp.finfo(dtype).eps),
@@ -69,19 +78,22 @@ def fit_student_t_em(
         return jnp.sum(solved**2, axis=0)
 
     def solve_nu(nu, avg_term):
-        eps = jnp.asarray(jnp.finfo(dtype).eps, **asarray_kwargs)
         eta_min = jnp.log(jnp.asarray(1e-3, **asarray_kwargs))
         eta_max = jnp.log(jnp.asarray(1e6, **asarray_kwargs))
 
-        def body(_, eta):
-            nu_current = jnp.exp(eta)
-            value = _nu_value(
-                nu_current,
-                avg_term,
-                dims_value,
-                xp=jnp,
-                digamma=jsp.digamma,
+        def condition(state):
+            iteration, _, _, _, value = state
+            return (
+                (iteration < _NU_SOLVER_MAX_ITER)
+                & jnp.isfinite(value)
+                & (jnp.abs(value) > root_tol_value)
             )
+
+        def body(state):
+            iteration, eta, eta_min, eta_max, value = state
+            nu_current = jnp.exp(eta)
+            eta_min = jnp.where(value > 0, eta, eta_min)
+            eta_max = jnp.where(value > 0, eta_max, eta)
             derivative = (
                 -0.5 * jsp.polygamma(1, nu_current / 2)
                 + 1 / nu_current
@@ -92,33 +104,61 @@ def fit_student_t_em(
             safe = (
                 jnp.isfinite(value)
                 & jnp.isfinite(denominator)
-                & (jnp.abs(denominator) > eps)
+                & (denominator != 0)
             )
-            step = jnp.where(safe, value / denominator, 0)
+            safe_denominator = jnp.where(safe, denominator, 1)
+            step = jnp.where(safe, value / safe_denominator, 0)
             step = jnp.clip(step, -2.0, 2.0)
-            candidate = jnp.clip(eta - step, eta_min, eta_max)
-            return jnp.where(jnp.isfinite(candidate), candidate, eta)
-
-        initial_residual = jnp.abs(
-            _nu_value(
-                nu,
+            newton_candidate = eta - step
+            # Use Newton only when its step is finite and remains inside the
+            # root bracket; otherwise bisect the bracket to guarantee progress.
+            use_newton = (
+                safe
+                & jnp.isfinite(newton_candidate)
+                & (newton_candidate > eta_min)
+                & (newton_candidate < eta_max)
+            )
+            candidate = jnp.where(
+                use_newton,
+                newton_candidate,
+                0.5 * (eta_min + eta_max),
+            )
+            candidate_value = _nu_value(
+                jnp.exp(candidate),
                 avg_term,
                 dims_value,
                 xp=jnp,
                 digamma=jsp.digamma,
             )
-        )
-        eta = jax.lax.fori_loop(0, 12, body, jnp.log(nu))
-        candidate = jnp.exp(eta)
-        final_residual = jnp.abs(
-            _nu_value(
+            return (
+                iteration + 1,
                 candidate,
-                avg_term,
-                dims_value,
-                xp=jnp,
-                digamma=jsp.digamma,
+                eta_min,
+                eta_max,
+                candidate_value,
             )
+
+        initial_value = _nu_value(
+            nu,
+            avg_term,
+            dims_value,
+            xp=jnp,
+            digamma=jsp.digamma,
         )
+        initial_residual = jnp.abs(initial_value)
+        _, eta, _, _, final_value = jax.lax.while_loop(
+            condition,
+            body,
+            (
+                jnp.asarray(0),
+                jnp.log(nu),
+                eta_min,
+                eta_max,
+                initial_value,
+            ),
+        )
+        candidate = jnp.exp(eta)
+        final_residual = jnp.abs(final_value)
         improved = jnp.isfinite(final_residual) & (
             final_residual <= initial_residual
         )
