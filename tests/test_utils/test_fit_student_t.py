@@ -1,8 +1,50 @@
 import numpy as np
 import pytest
+from scipy.special import polygamma, psi
 
-from minipcn.student_t import fit_student_t_em
+from minipcn.student_t import _nu_value, _solve_nu, fit_student_t_em
 from minipcn.utils import to_numpy_array
+
+
+@pytest.mark.parametrize(
+    ("dtype", "nu_init", "avg_term", "dims", "expected"),
+    [
+        (np.float64, 1e-3, -1.001, 1000, 618.3671231438226),
+        (np.float32, 1e5, -1.1, 10, 6.492608031799467),
+        (np.float32, 1e6, -1.8, 1000, 1.4953490086755392),
+    ],
+)
+def test_solve_nu_converges_from_distant_initial_value(
+    dtype, nu_init, avg_term, dims, expected
+):
+    def digamma(value):
+        return np.asarray(psi(value), dtype=dtype)
+
+    def trigamma(value):
+        return np.asarray(polygamma(1, value), dtype=dtype)
+
+    nu = np.asarray(nu_init, dtype=dtype)
+    avg = np.asarray(avg_term, dtype=dtype)
+    dims_value = np.asarray(dims, dtype=dtype)
+
+    result = _solve_nu(
+        nu,
+        avg,
+        dims_value,
+        xp=np,
+        digamma=digamma,
+        trigamma=trigamma,
+    )
+    residual = _nu_value(
+        result,
+        avg,
+        dims_value,
+        xp=np,
+        digamma=digamma,
+    )
+
+    np.testing.assert_allclose(result, expected, rtol=5e-6)
+    assert abs(float(residual)) <= max(1e-8, np.finfo(dtype).eps)
 
 
 @pytest.mark.parametrize("dims", [1, 2])
