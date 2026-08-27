@@ -51,10 +51,11 @@ def _solve_nu(
     tolerance = xp.maximum(xp.asarray(tol, dtype=dtype), eps)
     eta_min = xp.log(xp.asarray(1e-3, dtype=dtype))
     eta_max = xp.log(xp.asarray(1e6, dtype=dtype))
-    eta = xp.log(nu)
+    eta = xp.clip(xp.log(nu), eta_min, eta_max)
+    nu_initial = xp.exp(eta)
     initial_residual = xp.abs(
         _nu_value(
-            nu,
+            nu_initial,
             avg_term,
             dims,
             xp=xp,
@@ -98,8 +99,8 @@ def _solve_nu(
         )
         step = xp.clip(step, -2.0, 2.0)
         newton_candidate = eta - step
-        # Use Newton only when its step is finite and remains inside the root
-        # bracket; otherwise bisect the bracket to guarantee progress.
+        # Use Newton only when its step is finite and remains inside the
+        # current search interval; otherwise bisect the interval.
         use_newton = xp.logical_and(
             safe,
             xp.logical_and(
@@ -130,7 +131,7 @@ def _solve_nu(
         xp.isfinite(final_residual),
         final_residual <= initial_residual,
     )
-    return xp.where(improved, candidate, nu)
+    return xp.where(improved, candidate, nu_initial)
 
 
 def _fit_eager(
