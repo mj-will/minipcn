@@ -12,6 +12,8 @@ from minipcn.utils import to_numpy_array
         (np.float64, 1e-3, -1.001, 1000, 618.3671231438226),
         (np.float32, 1e5, -1.1, 10, 6.492608031799467),
         (np.float32, 1e6, -1.8, 1000, 1.4953490086755392),
+        (np.float32, 1e-6, -1.8, 1000, 1.4953490086755392),
+        (np.float32, 1e9, -1.1, 10, 6.492608031799467),
     ],
 )
 def test_solve_nu_converges_from_distant_initial_value(
@@ -45,6 +47,44 @@ def test_solve_nu_converges_from_distant_initial_value(
 
     np.testing.assert_allclose(result, expected, rtol=5e-6)
     assert abs(float(residual)) <= max(1e-8, np.finfo(dtype).eps)
+
+
+@pytest.mark.parametrize(
+    ("nu_init", "avg_term", "dims", "expected"),
+    [
+        (1e5, -1.1, 10, 6.492608031799467),
+        (1e6, -1.8, 1000, 1.4953490086755392),
+        (1e-6, -1.8, 1000, 1.4953490086755392),
+        (1e9, -1.1, 10, 6.492608031799467),
+    ],
+)
+def test_solve_nu_jax_converges(
+    nu_init,
+    avg_term,
+    dims,
+    expected,
+):
+    jax = pytest.importorskip("jax")
+    jnp = pytest.importorskip("jax.numpy")
+    jsp = pytest.importorskip("jax.scipy.special")
+    from minipcn._jax import _solve_nu as solve_nu_jax
+
+    dtype = jnp.float32
+    nu = jnp.asarray(nu_init, dtype=dtype)
+    avg = jnp.asarray(avg_term, dtype=dtype)
+    dims_value = jnp.asarray(dims, dtype=dtype)
+
+    result = jax.jit(solve_nu_jax)(nu, avg, dims_value)
+    residual = _nu_value(
+        result,
+        avg,
+        dims_value,
+        xp=jnp,
+        digamma=jsp.digamma,
+    )
+
+    np.testing.assert_allclose(result, expected, rtol=5e-6)
+    assert abs(float(residual)) <= max(1e-8, np.finfo(np.float32).eps)
 
 
 @pytest.mark.parametrize("dims", [1, 2])
