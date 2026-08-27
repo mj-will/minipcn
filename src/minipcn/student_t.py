@@ -6,6 +6,9 @@ from scipy.special import polygamma, psi
 
 from ._typing import Array
 
+_NU_SOLVER_MAX_ITER = 50
+_NU_SOLVER_TOL = 1e-8
+
 
 def _prepare_samples(x: Array, xp: Any) -> Array:
     if x.ndim == 1:
@@ -39,17 +42,20 @@ def _solve_nu(
     xp,
     digamma,
     trigamma,
-    max_iter: int = 12,
+    max_iter: int = _NU_SOLVER_MAX_ITER,
+    tol: float = _NU_SOLVER_TOL,
 ):
     """Solve the Student-t degrees-of-freedom equation in log-space."""
     dtype = nu.dtype
     eps = xp.asarray(xp.finfo(dtype).eps, dtype=dtype)
+    tolerance = xp.maximum(xp.asarray(tol, dtype=dtype), eps)
     eta_min = xp.log(xp.asarray(1e-3, dtype=dtype))
     eta_max = xp.log(xp.asarray(1e6, dtype=dtype))
-    eta = xp.log(nu)
+    eta = xp.clip(xp.log(nu), eta_min, eta_max)
+    nu_initial = xp.exp(eta)
     initial_residual = xp.abs(
         _nu_value(
-            nu,
+            nu_initial,
             avg_term,
             dims,
             xp=xp,
@@ -66,6 +72,10 @@ def _solve_nu(
             xp=xp,
             digamma=digamma,
         )
+        if bool(xp.abs(value) <= tolerance):
+            break
+        eta_min = xp.where(value > 0, eta, eta_min)
+        eta_max = xp.where(value > 0, eta_max, eta)
         derivative = (
             -0.5 * trigamma(nu_current / 2)
             + 1 / nu_current
@@ -75,12 +85,37 @@ def _solve_nu(
         denominator = nu_current * derivative
         safe = xp.logical_and(
             xp.logical_and(xp.isfinite(value), xp.isfinite(denominator)),
-            xp.abs(denominator) > eps,
+            denominator != xp.zeros_like(denominator),
         )
-        step = xp.where(safe, value / denominator, xp.zeros_like(value))
+        safe_denominator = xp.where(
+            safe,
+            denominator,
+            xp.ones_like(denominator),
+        )
+        step = xp.where(
+            safe,
+            value / safe_denominator,
+            xp.zeros_like(value),
+        )
         step = xp.clip(step, -2.0, 2.0)
-        candidate = xp.clip(eta - step, eta_min, eta_max)
-        eta = xp.where(xp.isfinite(candidate), candidate, eta)
+        newton_candidate = eta - step
+        # Use Newton only when its step is finite and remains inside the
+        # current search interval; otherwise bisect the interval.
+        use_newton = xp.logical_and(
+            safe,
+            xp.logical_and(
+                xp.isfinite(newton_candidate),
+                xp.logical_and(
+                    newton_candidate > eta_min,
+                    newton_candidate < eta_max,
+                ),
+            ),
+        )
+        eta = xp.where(
+            use_newton,
+            newton_candidate,
+            0.5 * (eta_min + eta_max),
+        )
 
     candidate = xp.exp(eta)
     final_residual = xp.abs(
@@ -96,7 +131,7 @@ def _solve_nu(
         xp.isfinite(final_residual),
         final_residual <= initial_residual,
     )
-    return xp.where(improved, candidate, nu)
+    return xp.where(improved, candidate, nu_initial)
 
 
 def _fit_eager(

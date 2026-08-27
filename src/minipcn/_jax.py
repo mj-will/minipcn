@@ -6,7 +6,12 @@ import jax.scipy.special as jsp
 from array_api_compat import device as get_device
 
 from ._typing import Array
-from .student_t import _nu_value, _prepare_samples
+from .student_t import (
+    _NU_SOLVER_MAX_ITER,
+    _NU_SOLVER_TOL,
+    _nu_value,
+    _prepare_samples,
+)
 
 
 def _is_tracer(value: Any) -> bool:
@@ -29,6 +34,115 @@ def _stack_history_values(values: list[Any], xp: Any) -> Any:
 
 def _register_dataclass(*args, **kwargs):
     return jax.tree_util.register_dataclass(*args, **kwargs)
+
+
+def _solve_nu(
+    nu,
+    avg_term,
+    dims,
+    *,
+    max_iter: int = _NU_SOLVER_MAX_ITER,
+    tol: float = _NU_SOLVER_TOL,
+):
+    """Solve the Student-t degrees-of-freedom equation in log-space."""
+    dtype = nu.dtype
+    asarray_kwargs: dict[str, Any] = {"dtype": dtype}
+    device = get_device(nu)
+    if device is not None:
+        asarray_kwargs["device"] = device
+
+    dims_value = jnp.asarray(dims, **asarray_kwargs)
+    tolerance = jnp.maximum(
+        jnp.asarray(tol, **asarray_kwargs),
+        jnp.asarray(jnp.finfo(dtype).eps, **asarray_kwargs),
+    )
+    eta_min = jnp.log(jnp.asarray(1e-3, **asarray_kwargs))
+    eta_max = jnp.log(jnp.asarray(1e6, **asarray_kwargs))
+    eta = jnp.clip(jnp.log(nu), eta_min, eta_max)
+    nu_initial = jnp.exp(eta)
+
+    def condition(state):
+        iteration, _, _, _, value = state
+        return (
+            (iteration < max_iter)
+            & jnp.isfinite(value)
+            & (jnp.abs(value) > tolerance)
+        )
+
+    def body(state):
+        iteration, eta, eta_min, eta_max, value = state
+        nu_current = jnp.exp(eta)
+        eta_min = jnp.where(value > 0, eta, eta_min)
+        eta_max = jnp.where(value > 0, eta_max, eta)
+        derivative = (
+            -0.5 * jsp.polygamma(1, nu_current / 2)
+            + 1 / nu_current
+            + 0.5 * jsp.polygamma(1, (nu_current + dims_value) / 2)
+            - 1 / (nu_current + dims_value)
+        )
+        denominator = nu_current * derivative
+        safe = (
+            jnp.isfinite(value)
+            & jnp.isfinite(denominator)
+            & (denominator != 0)
+        )
+        safe_denominator = jnp.where(safe, denominator, 1)
+        step = jnp.where(safe, value / safe_denominator, 0)
+        step = jnp.clip(step, -2.0, 2.0)
+        newton_candidate = eta - step
+        # Use Newton only when its step is finite and remains inside the
+        # current search interval; otherwise bisect the interval.
+        use_newton = (
+            safe
+            & jnp.isfinite(newton_candidate)
+            & (newton_candidate > eta_min)
+            & (newton_candidate < eta_max)
+        )
+        candidate = jnp.where(
+            use_newton,
+            newton_candidate,
+            0.5 * (eta_min + eta_max),
+        )
+        candidate_value = _nu_value(
+            jnp.exp(candidate),
+            avg_term,
+            dims_value,
+            xp=jnp,
+            digamma=jsp.digamma,
+        )
+        return (
+            iteration + 1,
+            candidate,
+            eta_min,
+            eta_max,
+            candidate_value,
+        )
+
+    initial_value = _nu_value(
+        nu_initial,
+        avg_term,
+        dims_value,
+        xp=jnp,
+        digamma=jsp.digamma,
+    )
+    initial_residual = jnp.abs(initial_value)
+    _, eta, _, _, final_value = jax.lax.while_loop(
+        condition,
+        body,
+        (
+            jnp.asarray(0),
+            eta,
+            eta_min,
+            eta_max,
+            initial_value,
+        ),
+    )
+    candidate = jnp.exp(eta)
+    final_residual = jnp.abs(final_value)
+    improved = jnp.isfinite(final_residual) & (
+        final_residual <= initial_residual
+    )
+    return jnp.where(improved, candidate, nu_initial)
 
 
 def fit_student_t_em(
@@ -68,62 +182,6 @@ def fit_student_t_em(
         )
         return jnp.sum(solved**2, axis=0)
 
-    def solve_nu(nu, avg_term):
-        eps = jnp.asarray(jnp.finfo(dtype).eps, **asarray_kwargs)
-        eta_min = jnp.log(jnp.asarray(1e-3, **asarray_kwargs))
-        eta_max = jnp.log(jnp.asarray(1e6, **asarray_kwargs))
-
-        def body(_, eta):
-            nu_current = jnp.exp(eta)
-            value = _nu_value(
-                nu_current,
-                avg_term,
-                dims_value,
-                xp=jnp,
-                digamma=jsp.digamma,
-            )
-            derivative = (
-                -0.5 * jsp.polygamma(1, nu_current / 2)
-                + 1 / nu_current
-                + 0.5 * jsp.polygamma(1, (nu_current + dims_value) / 2)
-                - 1 / (nu_current + dims_value)
-            )
-            denominator = nu_current * derivative
-            safe = (
-                jnp.isfinite(value)
-                & jnp.isfinite(denominator)
-                & (jnp.abs(denominator) > eps)
-            )
-            step = jnp.where(safe, value / denominator, 0)
-            step = jnp.clip(step, -2.0, 2.0)
-            candidate = jnp.clip(eta - step, eta_min, eta_max)
-            return jnp.where(jnp.isfinite(candidate), candidate, eta)
-
-        initial_residual = jnp.abs(
-            _nu_value(
-                nu,
-                avg_term,
-                dims_value,
-                xp=jnp,
-                digamma=jsp.digamma,
-            )
-        )
-        eta = jax.lax.fori_loop(0, 12, body, jnp.log(nu))
-        candidate = jnp.exp(eta)
-        final_residual = jnp.abs(
-            _nu_value(
-                candidate,
-                avg_term,
-                dims_value,
-                xp=jnp,
-                digamma=jsp.digamma,
-            )
-        )
-        improved = jnp.isfinite(final_residual) & (
-            final_residual <= initial_residual
-        )
-        return jnp.where(improved, candidate, nu)
-
     mu = jnp.mean(x, axis=0)
     centered = x - mu
     sigma = (jnp.permute_dims(centered, (1, 0)) @ centered) / jnp.asarray(
@@ -153,7 +211,7 @@ def fit_student_t_em(
 
         nu_weights = (nu + dims_value) / (nu + delta_new)
         avg_term = jnp.mean(jnp.log(nu_weights) - nu_weights)
-        nu_new = solve_nu(nu, avg_term)
+        nu_new = _solve_nu(nu, avg_term, dims_value)
 
         error = jnp.maximum(
             jnp.max(jnp.abs(mu_new - mu)),
