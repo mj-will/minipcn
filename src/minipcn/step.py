@@ -12,12 +12,20 @@ from .utils import ChainState, register_dataclass
 @register_dataclass
 @dataclass
 class StepState:
+    """Fitted proposal parameters and the number of completed transitions.
+
+    ``iteration`` carries the adaptation schedule across sampling calls. It
+    is a Python integer or backend integer scalar, and a dynamic JAX leaf.
+    Particle positions and random state are managed separately.
+    """
+
     mu: Any
     cov: Any
     inv_cov: Any
     chol_cov: Any
     rho: Any
     nu: Any | None = None
+    iteration: Any = 0
 
 
 class Step:
@@ -183,6 +191,7 @@ class PCNStep(Step):
             chol_cov=state.chol_cov,
             rho=rho_next,
             nu=state.nu,
+            iteration=state.iteration,
         )
         next_chain_state = ChainState(
             it=chain_state.it,
