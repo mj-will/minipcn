@@ -12,6 +12,17 @@ A minimal implementation of preconditioned Crank-Nicolson MCMC sampling.
 pip install minipcn
 ```
 
+For scan-based sampling (including automatic scan selection under JAX JIT),
+install the optional extra:
+
+```bash
+pip install 'minipcn[scan]'
+```
+
+Without this extra, `use_scan=None` falls back to the Python loop, including
+under JAX JIT. `use_scan=True` requires the extra and `verbose=False`;
+`use_scan=False` always uses the Python loop.
+
 ## Usage
 
 The basic usage is:

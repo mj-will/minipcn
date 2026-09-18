@@ -208,6 +208,7 @@ class Sampler:
         seed: int | None = None,
         verbose: bool = True,
         return_last_only: bool = False,
+        use_scan: bool | None = None,
         step_state: StepState | None = None,
         return_step_state: bool = False,
     ) -> (
@@ -247,6 +248,14 @@ class Sampler:
             Append the final StepState to the result tuple. Default False
             preserves the existing return signature. Under JAX JIT, this flag
             must be static, as must ``n_steps`` and ``return_last_only``.
+        use_scan:
+            Whether to use scan-based control flow. ``None`` selects scan
+            automatically while tracing JAX code when the optional ``scan``
+            extra is installed, otherwise falling back to the Python loop.
+            ``False`` always uses the Python loop, and ``True`` always uses
+            scan. Forced scan requires
+            ``verbose=False`` because progress reporting is unavailable inside
+            scan-based control flow. Install with ``pip install minipcn[scan]``.
 
         Returns
         -------
@@ -276,6 +285,7 @@ class Sampler:
             verbose=verbose,
             return_last_only=return_last_only,
             step_state=step_state,
+            use_scan=use_scan,
         )
 
         is_tracer = False
@@ -298,6 +308,7 @@ class Sampler:
         rng_state: Any,
         verbose: bool = True,
         return_last_only: bool = False,
+        use_scan: bool | None = None,
         step_state: StepState | None = None,
         return_step_state: bool = False,
     ) -> (
@@ -339,6 +350,14 @@ class Sampler:
             Append the final StepState to the result tuple. Default False
             preserves the existing return signature. Under JAX JIT, this flag
             must be static, as must ``n_steps`` and ``return_last_only``.
+        use_scan:
+            Whether to use scan-based control flow. ``None`` selects scan
+            automatically while tracing JAX code when the optional ``scan``
+            extra is installed, otherwise falling back to the Python loop.
+            ``False`` always uses the Python loop, and ``True`` always uses
+            scan. Forced scan requires
+            ``verbose=False`` because progress reporting is unavailable inside
+            scan-based control flow. Install with ``pip install minipcn[scan]``.
 
         Returns
         -------
@@ -366,6 +385,7 @@ class Sampler:
             verbose=verbose,
             return_last_only=return_last_only,
             step_state=step_state,
+            use_scan=use_scan,
         )
         if return_step_state:
             return chain, history, next_rng_state, final_step_state
@@ -380,10 +400,32 @@ class Sampler:
         rng_state: Any,
         verbose: bool,
         return_last_only: bool,
+        use_scan: bool | None,
         step_state: StepState | None = None,
     ) -> tuple[Array, ChainStateHistory, Any, StepState]:
-        xp = self.xp
-        x = xp.atleast_2d(x_init)
+        if use_scan is True and verbose:
+            raise ValueError("use_scan=True requires verbose=False")
+
+        force_scan = use_scan is True
+        if use_scan is None and not verbose and is_jax_namespace(self.xp):
+            from ._jax import _contains_tracer
+
+            use_scan = _contains_tracer((x_init, rng_state, step_state))
+        elif use_scan is None:
+            use_scan = False
+        if use_scan:
+            try:
+                from acai import scan
+            except ModuleNotFoundError as exc:
+                if exc.name != "acai":
+                    raise
+                if force_scan:
+                    raise ImportError(
+                        "use_scan=True requires acai-control. "
+                        "Install it with: pip install 'minipcn[scan]'"
+                    ) from exc
+                use_scan = False
+        x = self.xp.atleast_2d(x_init)
         step_fn = self._get_step(rng_backend)
         if n_steps < 0:
             raise ValueError("n_steps must be nonnegative.")
@@ -395,14 +437,68 @@ class Sampler:
             step_state = step_fn.init_state(x)
         else:
             self._validate_step_state(step_state, x)
-        initial_iteration = step_state.iteration
         log_prob_x = self.log_prob_fn(x)
+        initial_carry = rng_state, x, log_prob_x, step_state
+        target_acceptance_rate = self.xp.asarray(
+            self.target_acceptance_rate,
+            dtype=x.dtype,
+        )
+
+        if n_steps <= 0:
+            chain = x if return_last_only else self.xp.expand_dims(x, axis=0)
+            history = ChainStateHistory(
+                it=[],
+                acceptance_rate=[],
+                target_acceptance_rate=[],
+                step=step_fn.step_name,
+                extra_stats={},
+            )
+            return chain, history, rng_state, step_state
+
+        if use_scan:
+            return self._sample_scan(
+                scan_fn=scan,
+                x_init=x,
+                n_steps=n_steps,
+                rng_backend=rng_backend,
+                initial_carry=initial_carry,
+                step_fn=step_fn,
+                target_acceptance_rate=target_acceptance_rate,
+                return_last_only=return_last_only,
+            )
+
+        return self._sample_loop(
+            x_init=x,
+            n_steps=n_steps,
+            rng_backend=rng_backend,
+            initial_carry=initial_carry,
+            step_fn=step_fn,
+            target_acceptance_rate=target_acceptance_rate,
+            verbose=verbose,
+            return_last_only=return_last_only,
+        )
+
+    def _sample_loop(
+        self,
+        *,
+        x_init: Array,
+        n_steps: int,
+        rng_backend: Any,
+        initial_carry: tuple[Any, Array, Array, Any],
+        step_fn: Step,
+        target_acceptance_rate: Array,
+        verbose: bool,
+        return_last_only: bool,
+    ) -> tuple[Array, ChainStateHistory, Any, StepState]:
+        xp = self.xp
+        initial_iteration = initial_carry[3].iteration
+        carry = initial_carry
 
         chain_states: list[Array] | None
         if return_last_only:
             chain_states = None
         else:
-            chain_states = [x]
+            chain_states = [x_init]
 
         history_states: list[ChainState] = []
 
@@ -411,45 +507,24 @@ class Sampler:
             iterator = trange(n_steps, desc="Sampling", unit="step")
 
         for i in iterator:
-            rng_state, x_new, log_alpha_step = step_fn.propose(
-                step_state,
-                rng_state,
-                x,
+            carry, output = self._sample_step(
+                carry,
+                initial_iteration + i,
+                rng_backend=rng_backend,
+                step_fn=step_fn,
+                target_acceptance_rate=target_acceptance_rate,
             )
-            log_prob_x_new = self.log_prob_fn(x_new)
-            log_alpha = log_prob_x_new - log_prob_x + log_alpha_step
-            alpha = xp.exp(
-                xp.minimum(
-                    xp.asarray(0.0, dtype=log_alpha.dtype),
-                    log_alpha,
-                )
-            )
-
-            uniform, rng_state = rng_backend.uniform(
-                rng_state,
-                low=0.0,
-                high=1.0,
-                size=(x_new.shape[0],),
-                dtype=x_new.dtype,
-            )
-            accept = uniform < alpha
-            x = xp.where(accept[:, None], x_new, x)
-            log_prob_x = xp.where(accept, log_prob_x_new, log_prob_x)
+            rng_state, x, _, step_state = carry
 
             if chain_states is not None:
                 chain_states.append(x)
 
-            acceptance_rate = xp.sum(accept) / accept.shape[0]
             chain_state = ChainState(
                 it=initial_iteration + i,
-                acceptance_rate=acceptance_rate,
-                target_acceptance_rate=self.target_acceptance_rate,
+                acceptance_rate=output["acceptance_rate"],
+                target_acceptance_rate=output["target_acceptance_rate"],
                 step=step_fn.step_name,
-            )
-            step_state, chain_state = step_fn.adapt(
-                step_state,
-                chain_state,
-                samples=x,
+                extra_stats=output["extra_stats"],
             )
             history_states.append(chain_state)
 
@@ -483,6 +558,119 @@ class Sampler:
                 step=step_fn.step_name,
                 extra_stats={},
             )
+        final_step_state = replace(
+            step_state, iteration=initial_iteration + n_steps
+        )
+        return chain, history, rng_state, final_step_state
+
+    def _sample_step(
+        self,
+        carry: tuple[Any, Array, Array, Any],
+        iteration: Any,
+        *,
+        rng_backend: Any,
+        step_fn: Step,
+        target_acceptance_rate: Array,
+    ) -> tuple[tuple[Any, Array, Array, Any], dict[str, Any]]:
+        rng_state, x, log_prob_x, step_state = carry
+        rng_state, x_new, log_alpha_step = step_fn.propose(
+            step_state,
+            rng_state,
+            x,
+        )
+        log_prob_x_new = self.log_prob_fn(x_new)
+        log_alpha = log_prob_x_new - log_prob_x + log_alpha_step
+        alpha = self.xp.exp(
+            self.xp.minimum(
+                self.xp.asarray(0.0, dtype=log_alpha.dtype),
+                log_alpha,
+            )
+        )
+
+        uniform, rng_state = rng_backend.uniform(
+            rng_state,
+            low=0.0,
+            high=1.0,
+            size=(x_new.shape[0],),
+            dtype=x_new.dtype,
+        )
+        accept = uniform < alpha
+        x = self.xp.where(accept[:, None], x_new, x)
+        log_prob_x = self.xp.where(accept, log_prob_x_new, log_prob_x)
+
+        acceptance_rate = self.xp.sum(accept) / accept.shape[0]
+        chain_state = ChainState(
+            it=iteration,
+            acceptance_rate=acceptance_rate,
+            target_acceptance_rate=target_acceptance_rate,
+            step=step_fn.step_name,
+        )
+        step_state, chain_state = step_fn.adapt(
+            step_state,
+            chain_state,
+            samples=x,
+        )
+        next_carry = rng_state, x, log_prob_x, step_state
+        output = {
+            "acceptance_rate": chain_state.acceptance_rate,
+            "target_acceptance_rate": chain_state.target_acceptance_rate,
+            "extra_stats": chain_state.extra_stats,
+        }
+        return next_carry, output
+
+    def _sample_scan(
+        self,
+        *,
+        scan_fn: Callable,
+        x_init: Array,
+        n_steps: int,
+        rng_backend: Any,
+        initial_carry: tuple[Any, Array, Array, Any],
+        step_fn: Step,
+        target_acceptance_rate: Array,
+        return_last_only: bool,
+    ) -> tuple[Array, ChainStateHistory, Any, StepState]:
+        """Run sampling with backend-appropriate scan control flow."""
+
+        def body(carry, iteration):
+            next_carry, output = self._sample_step(
+                carry,
+                iteration,
+                rng_backend=rng_backend,
+                step_fn=step_fn,
+                target_acceptance_rate=target_acceptance_rate,
+            )
+            if not return_last_only:
+                output = {"particles": next_carry[1], **output}
+            return next_carry, output
+
+        initial_iteration = initial_carry[3].iteration
+        iterations = initial_iteration + self.xp.arange(n_steps)
+        final_carry, outputs = scan_fn(
+            body,
+            initial_carry,
+            iterations,
+            xp=self.xp,
+        )
+        rng_state, x, _, step_state = final_carry
+
+        if return_last_only:
+            chain = x
+        else:
+            chain = self.xp.concat(
+                (
+                    self.xp.expand_dims(x_init, axis=0),
+                    outputs["particles"],
+                ),
+                axis=0,
+            )
+        history = ChainStateHistory(
+            it=iterations,
+            acceptance_rate=outputs["acceptance_rate"],
+            target_acceptance_rate=outputs["target_acceptance_rate"],
+            step=step_fn.step_name,
+            extra_stats=outputs["extra_stats"],
+        )
         final_step_state = replace(
             step_state, iteration=initial_iteration + n_steps
         )

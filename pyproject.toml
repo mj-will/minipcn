@@ -26,6 +26,9 @@ dependencies = [
 dynamic = ["version"]
 
 [project.optional-dependencies]
+scan = [
+    "acai-control>=0.1.0",
+]
 jax = [
     "jax>0.4.35",
     "jaxlib"

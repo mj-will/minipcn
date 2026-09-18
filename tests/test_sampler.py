@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import builtins
 import pickle
+import subprocess
+import sys
 from copy import deepcopy
 from dataclasses import fields
 from typing import Any
@@ -420,3 +423,78 @@ def test_compatible_state_dtype_and_dimensions(
     assert chain.dtype == x.dtype
     # Adaptation must leave the state compatible for the next segment.
     sampler.sample(chain[-1], 1, seed=3, step_state=final, verbose=False)
+
+
+def test_import_without_acai():
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; sys.modules['acai'] = None; import minipcn",
+        ],
+        check=True,
+    )
+
+
+@pytest.mark.parametrize("use_scan", [None, False, True])
+def test_sampling_without_acai(monkeypatch, use_scan):
+    monkeypatch.setitem(sys.modules, "acai", None)
+    sampler = Sampler(lambda x: -0.5 * np.sum(x**2, axis=-1), "pcn", dims=2)
+    x = np.random.default_rng(1).normal(size=(32, 2))
+    if use_scan is True:
+        with pytest.raises(
+            ImportError, match=r"pip install 'minipcn\[scan\]'"
+        ):
+            sampler.sample(x, 2, seed=1, verbose=False, use_scan=True)
+    else:
+        chain, history = sampler.sample(
+            x, 2, seed=1, verbose=False, use_scan=use_scan
+        )
+        assert chain.shape == (3, 32, 2)
+        assert history.it == [0, 1]
+
+
+@pytest.mark.parametrize("step", ["pcn", "tpcn"])
+def test_jit_without_acai_matches_loop(monkeypatch, step):
+    jax = pytest.importorskip("jax")
+    jnp = pytest.importorskip("jax.numpy")
+    monkeypatch.setitem(sys.modules, "acai", None)
+    sampler = Sampler(
+        lambda x: -0.5 * jnp.sum(x**2, axis=-1), step, dims=2, xp=jnp
+    )
+    x = jnp.asarray(np.random.default_rng(1).normal(size=(32, 2)))
+    key = jax.random.key(1)
+
+    def run(x, key, use_scan):
+        return sampler.sample_functional(
+            x,
+            2,
+            rng_state=key,
+            verbose=False,
+            use_scan=use_scan,
+            return_step_state=True,
+        )
+
+    actual = jax.jit(lambda x, key: run(x, key, None))(x, key)
+    expected = jax.jit(lambda x, key: run(x, key, False))(x, key)
+    np.testing.assert_array_equal(actual[0], expected[0])
+    np.testing.assert_array_equal(actual[1].it, expected[1].it)
+    np.testing.assert_array_equal(
+        jax.random.key_data(actual[2]), jax.random.key_data(expected[2])
+    )
+    np.testing.assert_array_equal(actual[3].rho, expected[3].rho)
+    assert actual[3].iteration == expected[3].iteration == 2
+
+
+def test_disabled_scan_does_not_import_acai(monkeypatch):
+    original_import = builtins.__import__
+
+    def checked_import(name, *args, **kwargs):
+        if name == "acai":
+            pytest.fail("Disabled scan must not import acai")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", checked_import)
+    sampler = Sampler(lambda x: -0.5 * np.sum(x**2, axis=-1), "pcn", dims=2)
+    x = np.random.default_rng(1).normal(size=(32, 2))
+    sampler.sample(x, 2, seed=1, verbose=False, use_scan=False)
