@@ -21,12 +21,14 @@ dependencies = [
     "tqdm",
     "array-api-compat",
     "orng>=0.1.0",
-    "acai-control>=0.1.0",
 ]
 
 dynamic = ["version"]
 
 [project.optional-dependencies]
+scan = [
+    "acai-control>=0.1.0",
+]
 jax = [
     "jax>0.4.35",
     "jaxlib"
