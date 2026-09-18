@@ -5,7 +5,6 @@ from typing import Any, Callable
 from warnings import warn
 
 import numpy as np
-from acai import scan
 from array_api_compat import array_namespace, device, is_jax_namespace
 from orng import RandomGenerator, infer_backend_name_from_xp
 from orng.functional import (
@@ -251,10 +250,12 @@ class Sampler:
             must be static, as must ``n_steps`` and ``return_last_only``.
         use_scan:
             Whether to use scan-based control flow. ``None`` selects scan
-            automatically while tracing JAX code, ``False`` always uses the
-            Python loop, and ``True`` always uses scan. Forced scan requires
+            automatically while tracing JAX code when the optional ``scan``
+            extra is installed, otherwise falling back to the Python loop.
+            ``False`` always uses the Python loop, and ``True`` always uses
+            scan. Forced scan requires
             ``verbose=False`` because progress reporting is unavailable inside
-            scan-based control flow.
+            scan-based control flow. Install with ``pip install minipcn[scan]``.
 
         Returns
         -------
@@ -351,10 +352,12 @@ class Sampler:
             must be static, as must ``n_steps`` and ``return_last_only``.
         use_scan:
             Whether to use scan-based control flow. ``None`` selects scan
-            automatically while tracing JAX code, ``False`` always uses the
-            Python loop, and ``True`` always uses scan. Forced scan requires
+            automatically while tracing JAX code when the optional ``scan``
+            extra is installed, otherwise falling back to the Python loop.
+            ``False`` always uses the Python loop, and ``True`` always uses
+            scan. Forced scan requires
             ``verbose=False`` because progress reporting is unavailable inside
-            scan-based control flow.
+            scan-based control flow. Install with ``pip install minipcn[scan]``.
 
         Returns
         -------
@@ -403,12 +406,25 @@ class Sampler:
         if use_scan is True and verbose:
             raise ValueError("use_scan=True requires verbose=False")
 
+        force_scan = use_scan is True
         if use_scan is None and not verbose and is_jax_namespace(self.xp):
             from ._jax import _contains_tracer
 
             use_scan = _contains_tracer((x_init, rng_state, step_state))
         elif use_scan is None:
             use_scan = False
+        if use_scan:
+            try:
+                from acai import scan
+            except ModuleNotFoundError as exc:
+                if exc.name != "acai":
+                    raise
+                if force_scan:
+                    raise ImportError(
+                        "use_scan=True requires acai-control. "
+                        "Install it with: pip install 'minipcn[scan]'"
+                    ) from exc
+                use_scan = False
         x = self.xp.atleast_2d(x_init)
         step_fn = self._get_step(rng_backend)
         if n_steps < 0:
@@ -441,6 +457,7 @@ class Sampler:
 
         if use_scan:
             return self._sample_scan(
+                scan_fn=scan,
                 x_init=x,
                 n_steps=n_steps,
                 rng_backend=rng_backend,
@@ -604,6 +621,7 @@ class Sampler:
     def _sample_scan(
         self,
         *,
+        scan_fn: Callable,
         x_init: Array,
         n_steps: int,
         rng_backend: Any,
@@ -628,7 +646,7 @@ class Sampler:
 
         initial_iteration = initial_carry[3].iteration
         iterations = initial_iteration + self.xp.arange(n_steps)
-        final_carry, outputs = scan(
+        final_carry, outputs = scan_fn(
             body,
             initial_carry,
             iterations,

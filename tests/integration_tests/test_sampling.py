@@ -51,6 +51,7 @@ def test_sampling(rng, log_target_fn, step_fn, dims, xp):
 
 @pytest.mark.parametrize("step_fn", ["pCN", "tpCN"])
 def test_sampling_jax_jit_return_last_only(step_fn):
+    pytest.importorskip("acai")
     jax, _, sampler, x_init, rng_state = _make_jax_sampler(step_fn)
 
     def run(x0, state):
@@ -106,6 +107,7 @@ def test_sampling_jax_jit_scan_can_be_disabled():
 
 @pytest.mark.parametrize("step_fn", ["pCN", "tpCN"])
 def test_sampling_jax_scan_matches_loop(step_fn):
+    pytest.importorskip("acai")
     jax, _, sampler, x_init, rng_state = _make_jax_sampler(step_fn)
 
     scan_chain, scan_history, scan_rng_state = sampler.sample_functional(
