@@ -361,3 +361,62 @@ def test_array_mismatch_before_rng_resolution(
             sampler.sample_functional(x, 1, rng_state=None, verbose=False)
         else:
             sampler.sample(x, 1, verbose=False)
+
+
+@pytest.mark.parametrize("functional", [False, True])
+@pytest.mark.parametrize(
+    "problem", ["step_type", "dimensions", "dtype", "backend"]
+)
+def test_incompatible_state_before_target(
+    functional: bool, problem: str
+) -> None:
+    sampler = Sampler(no_target, "tpcn", dims=2)
+    x = np.random.default_rng(17).normal(size=(32, 2))
+    state = sampler.init_step_state(x)
+    if problem == "step_type":
+        state.nu = None
+    elif problem == "dimensions":
+        state.mu = state.mu[:1]
+    elif problem == "dtype":
+        x = x.astype(np.float32)
+    else:
+        jnp = pytest.importorskip("jax.numpy")
+        state = sampler.init_step_state(jnp.asarray(x))
+    with pytest.raises(ValueError, match="step_state"):
+        if functional:
+            sampler.sample_functional(
+                x, 0, rng_state=None, step_state=state, verbose=False
+            )
+        else:
+            sampler.sample(x, 0, seed=1, step_state=state, verbose=False)
+
+
+def test_state_device_mismatch_before_target() -> None:
+    torch = pytest.importorskip("torch")
+    sampler = Sampler(no_target, "pcn", dims=2, xp=torch)
+    x = torch.asarray(np.random.default_rng(17).normal(size=(32, 2)))
+    state = sampler.init_step_state(x)
+    # Exercise the device check without GPU hardware.
+    state.rho = state.rho.to("meta")
+    with pytest.raises(ValueError, match="step_state.rho.*backend"):
+        sampler.sample(x, 0, seed=1, step_state=state, verbose=False)
+
+
+@pytest.mark.parametrize("dtype_name", ["float32", "float64"])
+def test_compatible_state_dtype_and_dimensions(
+    xp: Any, dims: int, step_fn: str, dtype_name: str
+) -> None:
+    x = xp.asarray(
+        np.random.default_rng(20).normal(size=(32, dims)),
+        dtype=getattr(xp, dtype_name),
+    )
+    sampler = Sampler(
+        lambda x: -0.5 * xp.sum(x**2, axis=-1), step_fn, dims, xp=xp
+    )
+    state = sampler.init_step_state(x)
+    chain, _, final = sampler.sample(
+        x, 1, seed=2, step_state=state, return_step_state=True, verbose=False
+    )
+    assert chain.dtype == x.dtype
+    # Adaptation must leave the state compatible for the next segment.
+    sampler.sample(chain[-1], 1, seed=3, step_state=final, verbose=False)

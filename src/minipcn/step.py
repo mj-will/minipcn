@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from array_api_compat import array_namespace, device
 from orng.functional import FunctionalBackend
 
 from ._typing import Array
@@ -109,13 +110,17 @@ class PCNStep(Step):
         from .utils import fit_gaussian
 
         mu, cov = fit_gaussian(x)
+        # NumPy covariance fitting promotes float32 inputs to float64.
+        cov = self.xp.asarray(cov, dtype=x.dtype)
         if self.dims == 1:
             inv_cov = self.xp.atleast_2d(1.0 / cov)
             chol_cov = self.xp.atleast_2d(self.xp.sqrt(cov))
         else:
             inv_cov = self.xp.linalg.inv(cov)
             chol_cov = self.xp.linalg.cholesky(cov)
-        rho = self.xp.asarray(self.rho, dtype=x.dtype)
+        rho = array_namespace(x).asarray(
+            self.rho, dtype=x.dtype, device=device(x)
+        )
         return StepState(
             mu=mu,
             cov=cov,
@@ -184,6 +189,8 @@ class PCNStep(Step):
                 ),
             )
         )
+        # Acceptance-rate reductions may use a wider dtype than the particles.
+        rho_next = self.xp.asarray(rho_next, dtype=dtype)
         next_state = StepState(
             mu=state.mu,
             cov=state.cov,
@@ -234,7 +241,9 @@ class TPCNStep(PCNStep):
         else:
             inv_cov = self.xp.linalg.inv(cov)
             chol_cov = self.xp.linalg.cholesky(cov)
-        rho = self.xp.asarray(self.rho, dtype=x.dtype)
+        rho = array_namespace(x).asarray(
+            self.rho, dtype=x.dtype, device=device(x)
+        )
         return StepState(
             mu=mu,
             cov=cov,

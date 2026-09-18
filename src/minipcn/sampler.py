@@ -139,6 +139,36 @@ class Sampler:
                 "the samples."
             )
 
+    def _validate_step_state(self, state: StepState, x: Array) -> None:
+        """Validate supplied proposal parameters before evaluating the target."""
+        if not isinstance(state, StepState):
+            raise TypeError("step_state must be a StepState or None.")
+        if (state.nu is not None) != (self._step_name.lower() == "tpcn"):
+            raise ValueError("step_state.nu is required only for tpcn.")
+        # Univariate fits may return a scalar mean.
+        if state.mu.shape != (self.dims,) and not (
+            self.dims == 1 and state.mu.shape == ()
+        ):
+            raise ValueError("step_state dimensions must match the sampler.")
+        for name in ("mu", "cov", "inv_cov", "chol_cov", "rho", "nu"):
+            value = getattr(state, name)
+            if name == "nu" and value is None:
+                continue
+            if (
+                array_namespace(value) != array_namespace(x)
+                or value.dtype != x.dtype
+                # JAX tracers have no concrete device to compare.
+                or (
+                    device(x) is not None
+                    and device(value) is not None
+                    and device(value) != device(x)
+                )
+            ):
+                raise ValueError(
+                    f"step_state.{name} must match x_init's backend, "
+                    "dtype and device."
+                )
+
     def init_step_state(self, x_init: Array) -> StepState:
         """Fit proposal parameters without consuming random state.
 
@@ -206,8 +236,10 @@ class Sampler:
             the full chain history stacked along axis 0.
         step_state : StepState, optional
             Previously fitted state from this sampler's step type, dimensions,
-            array backend and dtype. If supplied, reuse its parameters without
-            fitting. The target is always reevaluated at ``x_init``, which may
+            array backend, dtype and device. Compatibility is checked before
+            target evaluation (device checks require concrete, eager arrays).
+            If supplied, reuse its parameters without fitting. The target is
+            always reevaluated at ``x_init``, which may
             have changed since the preceding call. Adaptation continues from
             the state's iteration count; use ``adaptive=False`` to freeze the
             proposal for interleaved moves.
@@ -296,8 +328,10 @@ class Sampler:
             the full chain history stacked along axis 0.
         step_state : StepState, optional
             Previously fitted state from this sampler's step type, dimensions,
-            array backend and dtype. If supplied, reuse its parameters without
-            fitting. The target is always reevaluated at ``x_init``, which may
+            array backend, dtype and device. Compatibility is checked before
+            target evaluation (device checks require concrete, eager arrays).
+            If supplied, reuse its parameters without fitting. The target is
+            always reevaluated at ``x_init``, which may
             have changed since the preceding call. Adaptation continues from
             the state's iteration count; use ``adaptive=False`` to freeze the
             proposal for interleaved moves.
@@ -353,10 +387,14 @@ class Sampler:
         step_fn = self._get_step(rng_backend)
         if n_steps < 0:
             raise ValueError("n_steps must be nonnegative.")
+        if x.ndim != 2 or x.shape[1] != self.dims:
+            raise ValueError(
+                f"x_init must have shape (n_samples, {self.dims})."
+            )
         if step_state is None:
             step_state = step_fn.init_state(x)
-        elif not isinstance(step_state, StepState):
-            raise TypeError("step_state must be a StepState or None.")
+        else:
+            self._validate_step_state(step_state, x)
         initial_iteration = step_state.iteration
         log_prob_x = self.log_prob_fn(x)
 
